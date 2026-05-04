@@ -1,6 +1,0 @@
-@Vortex_HostAddress = http://localhost:5219
-
-GET {{Vortex_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

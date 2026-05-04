@@ -53,3 +53,5 @@ appsettings.Development.json
 appsettings.Production.json
 
 *.aotconfig
+
+colliserver-master
