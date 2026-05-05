@@ -1,0 +1,270 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const (
+	vfTimestampBits = 41
+	vfNodeIDBits    = 5
+	vfSequenceBits  = 17
+
+	vfMaxTimestamp = (1 << vfTimestampBits) - 1
+	vfMaxNodeID    = (1 << vfNodeIDBits) - 1
+	vfMaxSequence  = (1 << vfSequenceBits) - 1
+
+	vfNodeIDShift    = vfSequenceBits
+	vfTimestampShift = vfSequenceBits + vfNodeIDBits
+)
+
+type IdSegment struct {
+	StartID int64
+	EndID   int64
+	BaseTs  int64
+	EndTs   int64
+	NodeID  int64
+	current atomic.Int64
+}
+
+func (s *IdSegment) Remaining() int {
+	return int(s.EndID - s.current.Load())
+}
+
+type IdGenerator struct {
+	nodeID   int64
+	mu       sync.Mutex
+	segMu    sync.Mutex
+	segments []*IdSegment
+	prefetchCh chan struct{}
+	idGenSt  *IdGeneratorStateStore
+	msgSt    *MessageStore
+	initOnce sync.Once
+	initDone chan struct{}
+}
+
+func NewIdGenerator(idGenSt *IdGeneratorStateStore, msgSt *MessageStore, nodeID int64) *IdGenerator {
+	return &IdGenerator{
+		nodeID:   nodeID,
+		segments: make([]*IdSegment, 0, 2),
+		prefetchCh: make(chan struct{}, 1),
+		idGenSt:  idGenSt,
+		msgSt:    msgSt,
+		initDone: make(chan struct{}),
+	}
+}
+
+func (g *IdGenerator) Init() {
+	g.initOnce.Do(func() {
+		if err := g.initFromDB(); err != nil {
+			log.Printf("id generator init warning: %v", err)
+		}
+		if err := g.fetchNewSegment(); err != nil {
+			log.Printf("id generator first segment fetch failed: %v", err)
+		}
+		close(g.initDone)
+	})
+}
+
+func (g *IdGenerator) WaitInit() {
+	<-g.initDone
+}
+
+func (g *IdGenerator) initFromDB() error {
+	state, err := g.idGenSt.GetFirst()
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
+	if state != nil {
+		return nil
+	}
+
+	now := time.Now().UnixMilli()
+	maxIDs, err := g.msgSt.GetMaxMessageIDsFromRecentTables(7)
+	if err != nil {
+		return fmt.Errorf("load max ids: %w", err)
+	}
+
+	startTs := now
+	if len(maxIDs) > 0 {
+		maxID := maxIDs[0]
+		for _, id := range maxIDs[1:] {
+			if id > maxID {
+				maxID = id
+			}
+		}
+		existingTs := maxID >> vfTimestampShift
+		if existingTs+1 > startTs {
+			startTs = existingTs + 1
+		}
+	}
+
+	initState := &IdGeneratorState{
+		LastTs: startTs + Cfg.SegmentDurationMs,
+	}
+
+	_, err = g.idGenSt.Insert(initState)
+	return err
+}
+
+func (g *IdGenerator) GenerateID() (int64, error) {
+	g.WaitInit()
+
+	for {
+		seg := g.peekSegment()
+		if seg == nil {
+			if err := g.fetchNewSegment(); err != nil {
+				return 0, err
+			}
+			continue
+		}
+
+		id := seg.current.Add(1)
+		if id <= seg.EndID {
+			g.tryPrefetch(seg)
+			return id, nil
+		}
+
+		g.popSegment()
+	}
+}
+
+func (g *IdGenerator) peekSegment() *IdSegment {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.segments) == 0 {
+		return nil
+	}
+	return g.segments[0]
+}
+
+func (g *IdGenerator) popSegment() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.segments) > 0 {
+		g.segments = g.segments[1:]
+	}
+}
+
+func (g *IdGenerator) tryPrefetch(current *IdSegment) {
+	if int64(current.Remaining()) > Cfg.SegmentSize/4 || len(g.segments) >= 2 {
+		return
+	}
+	select {
+	case g.prefetchCh <- struct{}{}:
+		go func() {
+			defer func() { <-g.prefetchCh }()
+			if err := g.fetchNewSegment(); err != nil {
+				log.Printf("prefetch segment failed: %v", err)
+			}
+		}()
+	default:
+	}
+}
+
+func (g *IdGenerator) fetchNewSegment() error {
+	g.mu.Lock()
+	if len(g.segments) >= 2 {
+		g.mu.Unlock()
+		return nil
+	}
+	g.mu.Unlock()
+
+	g.segMu.Lock()
+	defer g.segMu.Unlock()
+
+	state, err := g.idGenSt.GetFirst()
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
+	now := time.Now().UnixMilli()
+
+	var startTs int64
+	if state != nil {
+		if now < state.LastTs {
+			drift := state.LastTs - now
+			if drift <= 500 {
+				time.Sleep(time.Duration(drift) * time.Millisecond)
+				now = time.Now().UnixMilli()
+			}
+		}
+		startTs = max(now, state.LastTs)
+	} else {
+		startTs = now
+	}
+
+	endTs := startTs + Cfg.SegmentDurationMs
+
+	startID := (startTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift)
+	endID := (endTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift) | (1<<vfSequenceBits - 1)
+
+	seg := &IdSegment{
+		StartID: startID,
+		EndID:   endID,
+		BaseTs:  startTs,
+		EndTs:   endTs,
+		NodeID:  g.nodeID,
+	}
+	seg.current.Store(startID - 1)
+
+	if state != nil {
+		state.LastTs = endTs
+		_, err = g.idGenSt.Update(state)
+	} else {
+		newState := &IdGeneratorState{LastTs: endTs}
+		_, err = g.idGenSt.Insert(newState)
+	}
+	if err != nil {
+		return fmt.Errorf("persist state: %w", err)
+	}
+
+	g.mu.Lock()
+	g.segments = append(g.segments, seg)
+	g.mu.Unlock()
+
+	return nil
+}
+
+func (g *IdGenerator) GetNodeID() int64 {
+	return g.nodeID
+}
+
+func (g *IdGenerator) CalculateNextID(currentTs, currentSeq int64) (id, newTs, newSeq int64, err error) {
+	if g.nodeID < 0 || g.nodeID > vfMaxNodeID {
+		return 0, 0, 0, fmt.Errorf("node ID must be between 0 and %d", vfMaxNodeID)
+	}
+
+	newTs = currentTs
+	newSeq = currentSeq
+
+	if currentSeq < vfMaxSequence {
+		newSeq = currentSeq + 1
+	} else {
+		newTs = currentTs + 1
+		newSeq = 0
+	}
+
+	if newTs > vfMaxTimestamp {
+		return 0, 0, 0, fmt.Errorf("timestamp overflow")
+	}
+
+	id = (newTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift) | newSeq
+	return
+}
+
+func (g *IdGenerator) ExtractTimestampFromMsgID(msgID int64) int64 {
+	return msgID >> vfTimestampShift
+}
+
+func (g *IdGenerator) ExtractNodeIDFromMsgID(msgID int64) int64 {
+	return (msgID >> vfNodeIDShift) & vfMaxNodeID
+}
+
+func (g *IdGenerator) ExtractSequenceFromMsgID(msgID int64) int64 {
+	return msgID & vfMaxSequence
+}

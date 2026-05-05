@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
@@ -15,14 +18,19 @@ import (
 func main() {
 	cfg := LoadConfig()
 
-	db, err := initDB(cfg.DatabaseURL)
+	db, err := initDB(cfg)
 	if err != nil {
 		log.Fatalf("failed to init database: %v", err)
 	}
 	defer db.Close()
 
+	if err := RunMigrations(db); err != nil {
+		log.Fatalf("failed to run migrations: %v", err)
+	}
+
 	store := NewStore(db)
 	rateLimiter := NewRateLimiter()
+	rateLimiter.StartCleanup(time.Minute, 5*time.Minute)
 
 	userStore := &UserStore{Store: store}
 	msgStore := &MessageStore{Store: store}
@@ -30,7 +38,6 @@ func main() {
 	groupMemStore := &GroupMemberStore{Store: store}
 	friendStore := &FriendRequestStore{Store: store}
 	convPartStore := &ConversationParticipantStore{Store: store}
-	deviceStore := &UserDeviceStore{Store: store}
 	idGenStateStore := &IdGeneratorStateStore{Store: store}
 
 	idGen := NewIdGenerator(idGenStateStore, msgStore, cfg.NodeID)
@@ -38,15 +45,18 @@ func main() {
 
 	svc := NewService(
 		userStore, msgStore, groupStore, groupMemStore,
-		friendStore, convPartStore, deviceStore,
-		idGenStateStore, idGen, rateLimiter,
+		friendStore, convPartStore,
+		idGenStateStore, idGen,
 	)
 
-	jwtService := NewJwtService(cfg.JWTSecret, "vortex")
+	jwtService := NewJwtService(db, cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTExpiresMinutes)
+	jwtService.StartCleanup(30 * time.Minute)
 	handler := NewHandler(svc, jwtService)
 
 	r := gin.Default()
-	setupRoutes(r, handler, jwtService, userStore, deviceStore, cfg)
+	setupRoutes(r, handler, jwtService, userStore, rateLimiter, cfg)
+
+	srv := &http.Server{Addr: cfg.Port, Handler: r}
 
 	worker := NewWorker(svc, msgStore)
 	worker.Start()
@@ -55,19 +65,26 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		if err := r.Run(":8080"); err != nil {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("failed to start server: %v", err)
 		}
 	}()
 
 	<-quit
 	log.Println("shutting down...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("server forced to shutdown: %v", err)
+	}
+
+	rateLimiter.Stop()
 	worker.Stop()
 }
 
-func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStore, ds *UserDeviceStore, cfg *Config) {
-	r.Use(corsMiddleware(cfg))
-
+func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStore, rateLimiter *RateLimiter, cfg *Config) {
 	api := r.Group("/api")
 	{
 		api.POST("/auth/register", h.Register)
@@ -75,14 +92,13 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 
 		auth := api.Group("")
 		auth.Use(jwtMiddleware(jwtService))
-		auth.Use(deviceTokenMiddleware(us, ds))
 		{
 			auth.GET("/auth/me", h.GetMe)
 			auth.POST("/auth/logout", h.Logout)
 			auth.PUT("/auth/:publicId", h.UpdateUser)
 			auth.DELETE("/auth/:publicId", h.DeleteUser)
 
-			auth.POST("/messages/send", h.SendMessage)
+			auth.POST("/messages/send", rateLimitMiddleware(rateLimiter, time.Second), h.SendMessage)
 			auth.GET("/messages", h.GetMessages)
 			auth.POST("/messages/recall/:msgId", h.RecallMessage)
 
@@ -102,8 +118,8 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 	}
 }
 
-func initDB(databaseURL string) (*sql.DB, error) {
-	db, err := sql.Open("postgres", databaseURL)
+func initDB(cfg *Config) (*sql.DB, error) {
+	db, err := sql.Open("postgres", cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -112,39 +128,29 @@ func initDB(databaseURL string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(50)
-	db.SetMaxIdleConns(20)
+	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 
 	return db, nil
-}
-
-func corsMiddleware(cfg *Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Device-Token")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-
-		c.Next()
-	}
 }
 
 func jwtMiddleware(jwtService *JwtService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			c.AbortWithStatusJSON(401, ErrorResponse{Error: "unauthorized"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{Error: ErrUnauthorized.Message})
 			return
 		}
 
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := jwtService.ValidateToken(tokenStr)
 		if err != nil {
-			c.AbortWithStatusJSON(401, ErrorResponse{Error: "unauthorized"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{Error: ErrUnauthorized.Message})
+			return
+		}
+
+		if jwtService.IsBlacklisted(claims.ID) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{Error: ErrUnauthorized.Message})
 			return
 		}
 
@@ -155,28 +161,15 @@ func jwtMiddleware(jwtService *JwtService) gin.HandlerFunc {
 	}
 }
 
-func deviceTokenMiddleware(userStore *UserStore, deviceStore *UserDeviceStore) gin.HandlerFunc {
+func rateLimitMiddleware(rl *RateLimiter, interval time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.GetInt64("user_id")
-		deviceToken := c.GetHeader("X-Device-Token")
-
-		if userID == 0 || deviceToken == "" {
-			c.Next()
+		publicID := c.GetString("public_id")
+		if !rl.AllowRequestWithInterval(publicID, interval) {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, ErrorResponse{Error: ErrRateLimitExceeded.Message})
 			return
 		}
-
-		user, err := userStore.GetByID(userID)
-		if err != nil || user == nil {
-			c.AbortWithStatusJSON(401, ErrorResponse{Error: "unauthorized"})
-			return
-		}
-
-		valid, err := deviceStore.TokenBelongsToUser(userID, deviceToken)
-		if err != nil || !valid {
-			c.AbortWithStatusJSON(401, ErrorResponse{Error: "invalid device token"})
-			return
-		}
-
 		c.Next()
 	}
 }
+
+

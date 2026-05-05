@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,68 @@ type Store struct {
 
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
+}
+
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
+type User struct {
+	ID        int64  `db:"id"`
+	Username  string `db:"username"`
+	PwdHash   string `db:"pwd_hash"`
+	Email     string `db:"email"`
+	PublicID  string `db:"public_id"`
+	CreatedAt int64  `db:"created_at"`
+	UpdatedAt int64  `db:"updated_at"`
+}
+
+type Group struct {
+	GroupID     string `db:"group_id"`
+	Name        string `db:"name"`
+	Description string `db:"description"`
+	OwnerID     int64  `db:"owner_id"`
+	CreatedAt   int64  `db:"created_at"`
+	UpdatedAt   int64  `db:"updated_at"`
+	IsDeleted   int    `db:"is_deleted"`
+}
+
+type GroupMember struct {
+	ID       int64  `db:"id"`
+	GroupID  string `db:"group_id"`
+	UID      int64  `db:"uid"`
+	Role     string `db:"role"`
+	JoinedAt int64  `db:"joined_at"`
+}
+
+type FriendRequest struct {
+	ID         int64  `db:"id"`
+	FromUserID int64  `db:"from_user_id"`
+	ToUserID   int64  `db:"to_user_id"`
+	Message    string `db:"message"`
+	Status     string `db:"status"`
+	CreatedAt  int64  `db:"created_at"`
+	UpdatedAt  int64  `db:"updated_at"`
+}
+
+type Message struct {
+	MsgID      int64  `db:"msg_id"`
+	ConvID     string `db:"conv_id"`
+	FromUID    int64  `db:"from_uid"`
+	Content    string `db:"content"`
+	Ts         int64  `db:"ts"`
+	IsRecalled int    `db:"is_recalled"`
+}
+
+type ConversationParticipant struct {
+	ConvID string `db:"conv_id"`
+	UserID int64  `db:"user_id"`
+	JoinTs int64  `db:"join_ts"`
+}
+
+type IdGeneratorState struct {
+	ID     int64 `db:"id"`
+	LastTs int64 `db:"last_ts"`
 }
 
 // ==================== helpers ====================
@@ -111,7 +174,7 @@ func scanFriendRequests(rows *sql.Rows) ([]*FriendRequest, error) {
 
 func scanIdGenState(row *sql.Row) (*IdGeneratorState, error) {
 	var s IdGeneratorState
-	err := row.Scan(&s.ID, &s.LastTs, &s.LastSeq)
+	err := row.Scan(&s.ID, &s.LastTs)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -170,6 +233,14 @@ func (s *UserStore) Delete(id int64) (int64, error) {
 	return res.RowsAffected()
 }
 
+func (s *UserStore) DeleteTx(tx *sql.Tx, id int64) (int64, error) {
+	res, err := tx.Exec(`DELETE FROM users WHERE id = $1`, id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *UserStore) UsernameExists(username string) (bool, error) {
 	var exists bool
 	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, username).Scan(&exists)
@@ -190,11 +261,18 @@ func (s *UserStore) EmailExists(email string) (bool, error) {
 // Uses Postgres declarative partitioning on ts (milliseconds).
 // The parent partitioned table "messages" is created once.
 // Daily partitions "messages_YYYYMMDD" are created as partition children.
-// All CRUD queries go to the parent "messages" table — Postgres partition
-// pruning routes to the correct daily partition automatically.
+// CRUD queries go to the specific partition (e.g. messages_20260505)
+// for optimal performance without partition pruning overhead.
 
 type MessageStore struct {
 	*Store
+}
+
+func (s *MessageStore) tableName(from string) string {
+	if s.IsValidTableName(from) {
+		return from
+	}
+	return "messages"
 }
 
 // setupParentTable ensures the partitioned parent exists
@@ -225,19 +303,19 @@ func (s *MessageStore) IsValidTableName(tableName string) bool {
 }
 
 func (s *MessageStore) GetMessage(tableName string, msgID int64) (*Message, error) {
-	row := s.db.QueryRow(`
+	row := s.db.QueryRow(fmt.Sprintf(`
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
-		FROM messages WHERE msg_id = $1`, msgID)
+		FROM %s WHERE msg_id = $1`, s.tableName(tableName)), msgID)
 	return scanMessage(row)
 }
 
 func (s *MessageStore) GetConversationMessages(tableName string, convID string, limit, offset int) ([]*Message, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.db.Query(fmt.Sprintf(`
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
-		FROM messages
+		FROM %s
 		WHERE conv_id = $1
 		ORDER BY ts DESC
-		LIMIT $2 OFFSET $3`, convID, limit, offset)
+		LIMIT $2 OFFSET $3`, s.tableName(tableName)), convID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -246,12 +324,12 @@ func (s *MessageStore) GetConversationMessages(tableName string, convID string, 
 }
 
 func (s *MessageStore) GetMessagesByUser(tableName string, userID int64, limit, offset int) ([]*Message, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.db.Query(fmt.Sprintf(`
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
-		FROM messages
+		FROM %s
 		WHERE from_uid = $1
 		ORDER BY ts DESC
-		LIMIT $2 OFFSET $3`, userID, limit, offset)
+		LIMIT $2 OFFSET $3`, s.tableName(tableName)), userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -260,10 +338,10 @@ func (s *MessageStore) GetMessagesByUser(tableName string, userID int64, limit, 
 }
 
 func (s *MessageStore) InsertMessage(tableName string, msg *Message) (int64, error) {
-	err := s.db.QueryRow(`
-		INSERT INTO messages (msg_id, conv_id, from_uid, content, ts, is_recalled)
+	err := s.db.QueryRow(fmt.Sprintf(`
+		INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING msg_id`,
+		RETURNING msg_id`, s.tableName(tableName)),
 		msg.MsgID, msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled,
 	).Scan(&msg.MsgID)
 	return msg.MsgID, err
@@ -273,38 +351,33 @@ func (s *MessageStore) InsertMessagesBatch(tableName string, msgs []*Message) (i
 	if len(msgs) == 0 {
 		return 0, nil
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO messages (msg_id, conv_id, from_uid, content, ts, is_recalled)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (msg_id) DO NOTHING`)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
+	tbl := s.tableName(tableName)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled) VALUES ", tbl))
 
-	var count int64
-	for _, msg := range msgs {
-		res, err := stmt.Exec(msg.MsgID, msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled)
-		if err != nil {
-			return 0, err
+	args := make([]interface{}, 0, len(msgs)*6)
+	for i, msg := range msgs {
+		if i > 0 {
+			sb.WriteString(",")
 		}
-		n, _ := res.RowsAffected()
-		count += n
+		sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d)",
+			i*6+1, i*6+2, i*6+3, i*6+4, i*6+5, i*6+6))
+		args = append(args, msg.MsgID, msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled)
 	}
+	sb.WriteString(" ON CONFLICT (msg_id) DO NOTHING")
 
-	return count, tx.Commit()
+	res, err := s.db.Exec(sb.String(), args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *MessageStore) UpdateMessage(tableName string, msg *Message) (int64, error) {
-	res, err := s.db.Exec(`
-		UPDATE messages SET conv_id = $1, from_uid = $2, content = $3, ts = $4, is_recalled = $5
-		WHERE msg_id = $6`,
+	res, err := s.db.Exec(fmt.Sprintf(`
+		UPDATE %s SET conv_id = $1, from_uid = $2, content = $3, ts = $4, is_recalled = $5
+		WHERE msg_id = $6`, s.tableName(tableName)),
 		msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled, msg.MsgID,
 	)
 	if err != nil {
@@ -314,7 +387,7 @@ func (s *MessageStore) UpdateMessage(tableName string, msg *Message) (int64, err
 }
 
 func (s *MessageStore) DeleteMessage(tableName string, msgID int64) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM messages WHERE msg_id = $1`, msgID)
+	res, err := s.db.Exec(fmt.Sprintf(`DELETE FROM %s WHERE msg_id = $1`, s.tableName(tableName)), msgID)
 	if err != nil {
 		return 0, err
 	}
@@ -323,13 +396,13 @@ func (s *MessageStore) DeleteMessage(tableName string, msgID int64) (int64, erro
 
 func (s *MessageStore) GetMessageCount(tableName string, convID string) (int, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE conv_id = $1`, convID).Scan(&count)
+	err := s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE conv_id = $1`, s.tableName(tableName)), convID).Scan(&count)
 	return count, err
 }
 
 func (s *MessageStore) MessageExists(tableName string, msgID int64) (bool, error) {
 	var exists bool
-	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages WHERE msg_id = $1)`, msgID).Scan(&exists)
+	err := s.db.QueryRow(fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE msg_id = $1)`, s.tableName(tableName)), msgID).Scan(&exists)
 	return exists, err
 }
 
@@ -472,12 +545,6 @@ func (s *GroupStore) Delete(groupID string) (int64, error) {
 	return res.RowsAffected()
 }
 
-func (s *GroupStore) NameExists(name string) (bool, error) {
-	var exists bool
-	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1 AND is_deleted = 0)`, name).Scan(&exists)
-	return exists, err
-}
-
 // ==================== GroupMemberStore ====================
 
 type GroupMemberStore struct {
@@ -512,6 +579,14 @@ func (s *GroupMemberStore) DeleteByGroupAndUser(groupID string, uid int64) (int6
 
 func (s *GroupMemberStore) DeleteByUser(uid int64) (int64, error) {
 	res, err := s.db.Exec(`DELETE FROM group_members WHERE uid = $1`, uid)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *GroupMemberStore) DeleteByUserTx(tx *sql.Tx, uid int64) (int64, error) {
+	res, err := tx.Exec(`DELETE FROM group_members WHERE uid = $1`, uid)
 	if err != nil {
 		return 0, err
 	}
@@ -620,6 +695,14 @@ func (s *FriendRequestStore) DeleteByUser(userID int64) (int64, error) {
 	return res.RowsAffected()
 }
 
+func (s *FriendRequestStore) DeleteByUserTx(tx *sql.Tx, userID int64) (int64, error) {
+	res, err := tx.Exec(`DELETE FROM friend_requests WHERE from_user_id = $1 OR to_user_id = $1`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // ==================== ConversationParticipantStore ====================
 
 type ConversationParticipantStore struct {
@@ -667,39 +750,6 @@ func (s *ConversationParticipantStore) InsertBatch(participants []*ConversationP
 	return count, tx.Commit()
 }
 
-// ==================== UserDeviceStore ====================
-
-type UserDeviceStore struct {
-	*Store
-}
-
-func (s *UserDeviceStore) TokenBelongsToUser(userID int64, deviceToken string) (bool, error) {
-	var exists bool
-	err := s.db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM user_devices WHERE user_id = $1 AND device_token = $2 AND is_active = 1)`,
-		userID, deviceToken,
-	).Scan(&exists)
-	return exists, err
-}
-
-func (s *UserDeviceStore) ClearDeviceToken(userID int64, deviceToken string) (int64, error) {
-	res, err := s.db.Exec(`
-		UPDATE user_devices SET is_active = 0, updated_at = EXTRACT(EPOCH FROM now())::bigint
-		WHERE user_id = $1 AND device_token = $2`, userID, deviceToken)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
-}
-
-func (s *UserDeviceStore) DeleteByUser(userID int64) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM user_devices WHERE user_id = $1`, userID)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
-}
-
 // ==================== IdGeneratorStateStore ====================
 
 type IdGeneratorStateStore struct {
@@ -707,26 +757,26 @@ type IdGeneratorStateStore struct {
 }
 
 func (s *IdGeneratorStateStore) GetFirst() (*IdGeneratorState, error) {
-	row := s.db.QueryRow(`SELECT id, last_ts, last_seq FROM id_generator_state ORDER BY id LIMIT 1`)
+	row := s.db.QueryRow(`SELECT id, last_ts FROM id_generator_state ORDER BY id LIMIT 1`)
 	return scanIdGenState(row)
 }
 
 func (s *IdGeneratorStateStore) Insert(state *IdGeneratorState) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(`
-		INSERT INTO id_generator_state (last_ts, last_seq)
-		VALUES ($1, $2)
+		INSERT INTO id_generator_state (last_ts)
+		VALUES ($1)
 		RETURNING id`,
-		state.LastTs, state.LastSeq,
+		state.LastTs,
 	).Scan(&id)
 	return id, err
 }
 
 func (s *IdGeneratorStateStore) Update(state *IdGeneratorState) (int64, error) {
 	res, err := s.db.Exec(`
-		UPDATE id_generator_state SET last_ts = $1, last_seq = $2
-		WHERE id = $3`,
-		state.LastTs, state.LastSeq, state.ID,
+		UPDATE id_generator_state SET last_ts = $1
+		WHERE id = $2`,
+		state.LastTs, state.ID,
 	)
 	if err != nil {
 		return 0, err
