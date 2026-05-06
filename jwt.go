@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -20,14 +22,42 @@ type JwtService struct {
 	secret           []byte
 	issuer           string
 	expiresInMinutes int
+	blacklistMu      sync.RWMutex
+	blacklistCache   map[string]int64
 }
 
 func NewJwtService(db *sql.DB, secret, issuer string, expiresInMinutes int) *JwtService {
-	return &JwtService{
+	js := &JwtService{
 		db:               db,
 		secret:           []byte(secret),
 		issuer:           issuer,
 		expiresInMinutes: expiresInMinutes,
+		blacklistCache:   make(map[string]int64),
+	}
+	js.loadBlacklistFromDB()
+	return js
+}
+
+func (j *JwtService) loadBlacklistFromDB() {
+	rows, err := j.db.Query(`SELECT jti, expires_at FROM jwt_blacklist`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now().UnixMilli()
+	j.blacklistMu.Lock()
+	defer j.blacklistMu.Unlock()
+
+	for rows.Next() {
+		var jti string
+		var expiresAt int64
+		if err := rows.Scan(&jti, &expiresAt); err != nil {
+			continue
+		}
+		if expiresAt > now {
+			j.blacklistCache[jti] = expiresAt
+		}
 	}
 }
 
@@ -38,26 +68,32 @@ func (j *JwtService) BlacklistToken(jti string, expiresAt int64) error {
 		ON CONFLICT (jti) DO NOTHING`,
 		jti, expiresAt,
 	)
+	if err == nil {
+		j.blacklistMu.Lock()
+		j.blacklistCache[jti] = expiresAt
+		j.blacklistMu.Unlock()
+	}
 	return err
 }
 
 func (j *JwtService) IsBlacklisted(jti string) bool {
-	var exists bool
-	err := j.db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM jwt_blacklist WHERE jti = $1)`,
-		jti,
-	).Scan(&exists)
-	if err != nil {
-		return false
-	}
-	return exists
+	j.blacklistMu.RLock()
+	exp, ok := j.blacklistCache[jti]
+	j.blacklistMu.RUnlock()
+	return ok && exp > time.Now().UnixMilli()
 }
 
 func (j *JwtService) CleanupBlacklist() {
 	now := time.Now().UnixMilli()
-	_, err := j.db.Exec(`DELETE FROM jwt_blacklist WHERE expires_at < $1`, now)
-	if err != nil {
-		return
+
+	_, _ = j.db.Exec(`DELETE FROM jwt_blacklist WHERE expires_at < $1`, now)
+
+	j.blacklistMu.Lock()
+	defer j.blacklistMu.Unlock()
+	for jti, exp := range j.blacklistCache {
+		if exp < now {
+			delete(j.blacklistCache, jti)
+		}
 	}
 }
 
@@ -74,6 +110,13 @@ func (j *JwtService) StartCleanup(interval time.Duration) {
 func (j *JwtService) GenerateToken(user *User) (string, error) {
 	now := time.Now()
 	expiresAt := now.Add(time.Duration(j.expiresInMinutes) * time.Minute)
+
+	jtiBytes := make([]byte, 16)
+	if _, err := rand.Read(jtiBytes); err != nil {
+		return "", fmt.Errorf("failed to generate token ID: %w", err)
+	}
+	jti := fmt.Sprintf("%x", jtiBytes)
+
 	claims := JwtClaims{
 		UserID:   user.ID,
 		PublicID: user.PublicID,
@@ -84,7 +127,7 @@ func (j *JwtService) GenerateToken(user *User) (string, error) {
 			NotBefore: jwt.NewNumericDate(now),
 			Issuer:    j.issuer,
 			Audience:  []string{j.issuer},
-			ID:        fmt.Sprintf("%d", now.UnixNano()),
+			ID:        jti,
 		},
 	}
 

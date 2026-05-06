@@ -4,9 +4,12 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	mathrand "math/rand"
+	"net/http"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ==================== NanoId ====================
@@ -15,7 +18,7 @@ func goSafe(fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("goroutine panic recovered: %v", r)
+				slog.Error("goroutine panic recovered", "panic", r)
 			}
 		}()
 		fn()
@@ -45,15 +48,25 @@ func GenerateNanoID(size int) string {
 type Handler struct {
 	svc *Service
 	jwt *JwtService
+	cfg *Config
 }
 
-func NewHandler(svc *Service, jwt *JwtService) *Handler {
-	return &Handler{svc: svc, jwt: jwt}
+func NewHandler(svc *Service, jwt *JwtService, cfg *Config) *Handler {
+	return &Handler{svc: svc, jwt: jwt, cfg: cfg}
+}
+
+func (h *Handler) HealthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status":    "ok",
+		"node_id":   h.cfg.NodeID,
+		"timestamp": time.Now().UnixMilli(),
+	})
 }
 
 // ==================== Service ====================
 
 type Service struct {
+	cfg           *Config
 	userStore     *UserStore
 	msgStore      *MessageStore
 	groupStore    *GroupStore
@@ -65,6 +78,7 @@ type Service struct {
 }
 
 func NewService(
+	cfg *Config,
 	userStore *UserStore,
 	msgStore *MessageStore,
 	groupStore *GroupStore,
@@ -75,6 +89,7 @@ func NewService(
 	idGen *IdGenerator,
 ) *Service {
 	return &Service{
+		cfg:           cfg,
 		userStore:     userStore,
 		msgStore:      msgStore,
 		groupStore:    groupStore,
@@ -113,7 +128,7 @@ func (s *Service) SendNotificationToUser(uid int64, notifType string, data map[s
 		return 0, err
 	}
 
-	ts := time.Now().UnixMilli() - Cfg.EpochTime
+	ts := time.Now().UnixMilli() - s.cfg.EpochTime
 	tableName := MessageTableNameByTs(ts)
 
 	msg := &Message{

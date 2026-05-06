@@ -1,12 +1,11 @@
 package main
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 )
-
-var Cfg *Config
 
 type Config struct {
 	NodeID   int64
@@ -62,6 +61,34 @@ func envInt64(key string, fallback int64) int64 {
 	return fallback
 }
 
+func (cfg *Config) Validate() error {
+	if cfg.NodeID < 0 || cfg.NodeID > vfMaxNodeID {
+		return fmt.Errorf("NODE_ID must be between 0 and %d", vfMaxNodeID)
+	}
+	if cfg.BCryptCost < 10 || cfg.BCryptCost > 15 {
+		return fmt.Errorf("BCRYPT_COST must be between 10 and 15")
+	}
+	if cfg.JWTSecret == "" {
+		return fmt.Errorf("JWT_SECRET is required")
+	}
+	if cfg.SegmentDurationMs <= 0 {
+		return fmt.Errorf("SEGMENT_DURATION_MS must be positive")
+	}
+	if cfg.SegmentSize <= 0 {
+		return fmt.Errorf("SEGMENT_SIZE must be positive")
+	}
+	if cfg.MessageRetentionDays <= 0 {
+		return fmt.Errorf("MESSAGE_RETENTION_DAYS must be positive")
+	}
+	if cfg.DefaultPageSize <= 0 || cfg.MaxPageSize <= 0 {
+		return fmt.Errorf("PAGE_SIZE must be positive")
+	}
+	if cfg.DefaultPageSize > cfg.MaxPageSize {
+		return fmt.Errorf("DEFAULT_PAGE_SIZE cannot exceed MAX_PAGE_SIZE")
+	}
+	return nil
+}
+
 func LoadConfig() *Config {
 	cfg := &Config{
 		NodeID:                                envInt64("NODE_ID", 0),
@@ -92,9 +119,13 @@ func LoadConfig() *Config {
 	}
 
 	if cfg.JWTSecret == "dev_jwt_secret_key_for_development_only" {
-		log.Println("WARNING: Using default JWT secret. Set JWT_SECRET environment variable for production.")
+		slog.Warn("using default JWT secret. Set JWT_SECRET environment variable for production")
 	}
 
-	Cfg = cfg
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid config", "error", err)
+		os.Exit(1)
+	}
+
 	return cfg
 }

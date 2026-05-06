@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,12 +20,14 @@ func main() {
 
 	db, err := initDB(cfg)
 	if err != nil {
-		log.Fatalf("failed to init database: %v", err)
+		slog.Error("failed to init database", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	if err := RunMigrations(db); err != nil {
-		log.Fatalf("failed to run migrations: %v", err)
+		slog.Error("failed to run migrations", "error", err)
+		os.Exit(1)
 	}
 
 	store := NewStore(db)
@@ -40,10 +42,11 @@ func main() {
 	convPartStore := &ConversationParticipantStore{Store: store}
 	idGenStateStore := &IdGeneratorStateStore{Store: store}
 
-	idGen := NewIdGenerator(idGenStateStore, msgStore, cfg.NodeID)
+	idGen := NewIdGenerator(cfg, idGenStateStore, msgStore, cfg.NodeID)
 	idGen.Init()
 
 	svc := NewService(
+		cfg,
 		userStore, msgStore, groupStore, groupMemStore,
 		friendStore, convPartStore,
 		idGenStateStore, idGen,
@@ -51,14 +54,17 @@ func main() {
 
 	jwtService := NewJwtService(db, cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTExpiresMinutes)
 	jwtService.StartCleanup(30 * time.Minute)
-	handler := NewHandler(svc, jwtService)
+	handler := NewHandler(svc, jwtService, cfg)
 
+	if os.Getenv("GIN_MODE") == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	r := gin.Default()
 	setupRoutes(r, handler, jwtService, userStore, rateLimiter, cfg)
 
 	srv := &http.Server{Addr: cfg.Port, Handler: r}
 
-	worker := NewWorker(svc, msgStore)
+	worker := NewWorker(cfg, svc, msgStore)
 	worker.Start()
 
 	quit := make(chan os.Signal, 1)
@@ -66,18 +72,19 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("failed to start server: %v", err)
+			slog.Error("failed to start server", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	<-quit
-	log.Println("shutting down...")
+	slog.Info("shutting down...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("server forced to shutdown: %v", err)
+		slog.Error("server forced to shutdown", "error", err)
 	}
 
 	rateLimiter.Stop()
@@ -85,6 +92,8 @@ func main() {
 }
 
 func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStore, rateLimiter *RateLimiter, cfg *Config) {
+	r.GET("/health", h.HealthCheck)
+
 	api := r.Group("/api")
 	{
 		api.POST("/auth/register", h.Register)
@@ -101,6 +110,7 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 			auth.POST("/messages/send", rateLimitMiddleware(rateLimiter, time.Second), h.SendMessage)
 			auth.GET("/messages", h.GetMessages)
 			auth.POST("/messages/recall/:msgId", h.RecallMessage)
+			auth.GET("/check", rateLimitMiddleware(rateLimiter, 3*time.Second), h.CheckNewMessages)
 
 			auth.POST("/groups", h.CreateGroup)
 			auth.GET("/groups/:id", h.GetGroup)
@@ -171,5 +181,3 @@ func rateLimitMiddleware(rl *RateLimiter, interval time.Duration) gin.HandlerFun
 		c.Next()
 	}
 }
-
-

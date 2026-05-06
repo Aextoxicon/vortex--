@@ -302,20 +302,41 @@ func (s *MessageStore) IsValidTableName(tableName string) bool {
 	return err == nil
 }
 
+func (s *MessageStore) quoteTableName(tableName string) (string, error) {
+	tbl := s.tableName(tableName)
+	if !s.IsValidTableName(tbl) {
+		return "", fmt.Errorf("invalid table name: %s", tbl)
+	}
+	var quoted string
+	err := s.db.QueryRow("SELECT quote_ident($1)", tbl).Scan(&quoted)
+	if err != nil {
+		return "", fmt.Errorf("quote table name failed: %w", err)
+	}
+	return quoted, nil
+}
+
 func (s *MessageStore) GetMessage(tableName string, msgID int64) (*Message, error) {
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return nil, err
+	}
 	row := s.db.QueryRow(fmt.Sprintf(`
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
-		FROM %s WHERE msg_id = $1`, s.tableName(tableName)), msgID)
+		FROM %s WHERE msg_id = $1`, quoted), msgID)
 	return scanMessage(row)
 }
 
 func (s *MessageStore) GetConversationMessages(tableName string, convID string, limit, offset int) ([]*Message, error) {
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(fmt.Sprintf(`
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
 		FROM %s
 		WHERE conv_id = $1
 		ORDER BY ts DESC
-		LIMIT $2 OFFSET $3`, s.tableName(tableName)), convID, limit, offset)
+		LIMIT $2 OFFSET $3`, quoted), convID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -324,12 +345,16 @@ func (s *MessageStore) GetConversationMessages(tableName string, convID string, 
 }
 
 func (s *MessageStore) GetMessagesByUser(tableName string, userID int64, limit, offset int) ([]*Message, error) {
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(fmt.Sprintf(`
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
 		FROM %s
 		WHERE from_uid = $1
 		ORDER BY ts DESC
-		LIMIT $2 OFFSET $3`, s.tableName(tableName)), userID, limit, offset)
+		LIMIT $2 OFFSET $3`, quoted), userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -338,10 +363,28 @@ func (s *MessageStore) GetMessagesByUser(tableName string, userID int64, limit, 
 }
 
 func (s *MessageStore) InsertMessage(tableName string, msg *Message) (int64, error) {
-	err := s.db.QueryRow(fmt.Sprintf(`
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return 0, err
+	}
+	err = s.db.QueryRow(fmt.Sprintf(`
 		INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING msg_id`, s.tableName(tableName)),
+		RETURNING msg_id`, quoted),
+		msg.MsgID, msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled,
+	).Scan(&msg.MsgID)
+	return msg.MsgID, err
+}
+
+func (s *MessageStore) InsertMessageTx(tx *sql.Tx, tableName string, msg *Message) (int64, error) {
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return 0, err
+	}
+	err = tx.QueryRow(fmt.Sprintf(`
+		INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING msg_id`, quoted),
 		msg.MsgID, msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled,
 	).Scan(&msg.MsgID)
 	return msg.MsgID, err
@@ -352,9 +395,13 @@ func (s *MessageStore) InsertMessagesBatch(tableName string, msgs []*Message) (i
 		return 0, nil
 	}
 
-	tbl := s.tableName(tableName)
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return 0, err
+	}
+
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled) VALUES ", tbl))
+	sb.WriteString(fmt.Sprintf("INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled) VALUES ", quoted))
 
 	args := make([]interface{}, 0, len(msgs)*6)
 	for i, msg := range msgs {
@@ -375,9 +422,13 @@ func (s *MessageStore) InsertMessagesBatch(tableName string, msgs []*Message) (i
 }
 
 func (s *MessageStore) UpdateMessage(tableName string, msg *Message) (int64, error) {
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return 0, err
+	}
 	res, err := s.db.Exec(fmt.Sprintf(`
 		UPDATE %s SET conv_id = $1, from_uid = $2, content = $3, ts = $4, is_recalled = $5
-		WHERE msg_id = $6`, s.tableName(tableName)),
+		WHERE msg_id = $6`, quoted),
 		msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled, msg.MsgID,
 	)
 	if err != nil {
@@ -387,22 +438,90 @@ func (s *MessageStore) UpdateMessage(tableName string, msg *Message) (int64, err
 }
 
 func (s *MessageStore) DeleteMessage(tableName string, msgID int64) (int64, error) {
-	res, err := s.db.Exec(fmt.Sprintf(`DELETE FROM %s WHERE msg_id = $1`, s.tableName(tableName)), msgID)
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return 0, err
+	}
+	res, err := s.db.Exec(fmt.Sprintf(`DELETE FROM %s WHERE msg_id = $1`, quoted), msgID)
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
 }
 
+type MessagePage struct {
+	Messages []*Message
+	HasMore  bool
+	MaxMsgID int64
+}
+
+func (s *MessageStore) GetConversationMessagesByRange(convID string, startTs, endTs int64, limit int, lastMsgId int64) (*MessagePage, error) {
+	queryLimit := limit + 1
+
+	var rows *sql.Rows
+	var err error
+
+	if lastMsgId > 0 {
+		rows, err = s.db.Query(`
+			SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
+			FROM messages
+			WHERE conv_id = $1 AND ts >= $2 AND ts < $3 AND msg_id > $4
+			ORDER BY ts ASC, msg_id ASC
+			LIMIT $5`,
+			convID, startTs, endTs, lastMsgId, queryLimit)
+	} else {
+		rows, err = s.db.Query(`
+			SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
+			FROM messages
+			WHERE conv_id = $1 AND ts >= $2 AND ts < $3
+			ORDER BY ts ASC, msg_id ASC
+			LIMIT $4`,
+			convID, startTs, endTs, queryLimit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messages, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+	}
+
+	var maxMsgID int64
+	if len(messages) > 0 {
+		maxMsgID = messages[len(messages)-1].MsgID
+	}
+
+	return &MessagePage{
+		Messages: messages,
+		HasMore:  hasMore,
+		MaxMsgID: maxMsgID,
+	}, nil
+}
+
 func (s *MessageStore) GetMessageCount(tableName string, convID string) (int, error) {
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return 0, err
+	}
 	var count int
-	err := s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE conv_id = $1`, s.tableName(tableName)), convID).Scan(&count)
+	err = s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE conv_id = $1`, quoted), convID).Scan(&count)
 	return count, err
 }
 
 func (s *MessageStore) MessageExists(tableName string, msgID int64) (bool, error) {
+	quoted, err := s.quoteTableName(tableName)
+	if err != nil {
+		return false, err
+	}
 	var exists bool
-	err := s.db.QueryRow(fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE msg_id = $1)`, s.tableName(tableName)), msgID).Scan(&exists)
+	err = s.db.QueryRow(fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE msg_id = $1)`, quoted), msgID).Scan(&exists)
 	return exists, err
 }
 
@@ -479,6 +598,21 @@ func (s *MessageStore) GetMaxMessageIDsFromRecentTables(days int) ([]int64, erro
 		return []int64{maxID}, nil
 	}
 	return nil, nil
+}
+
+func (s *MessageStore) HasNewMessagesAfter(userID int64, lastMsgID int64) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM messages
+			WHERE msg_id > $1
+			AND conv_id IN (
+				SELECT conv_id FROM conversation_participants WHERE user_id = $2
+			)
+		)`,
+		lastMsgID, userID,
+	).Scan(&exists)
+	return exists, err
 }
 
 // ==================== GroupStore ====================
@@ -563,9 +697,13 @@ func (s *GroupMemberStore) Insert(member *GroupMember) (int64, error) {
 	err := s.db.QueryRow(`
 		INSERT INTO group_members (group_id, uid, role, joined_at)
 		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (group_id, uid) DO NOTHING
 		RETURNING id`,
 		member.GroupID, member.UID, member.Role, member.JoinedAt,
 	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
 	return id, err
 }
 
@@ -587,6 +725,14 @@ func (s *GroupMemberStore) DeleteByUser(uid int64) (int64, error) {
 
 func (s *GroupMemberStore) DeleteByUserTx(tx *sql.Tx, uid int64) (int64, error) {
 	res, err := tx.Exec(`DELETE FROM group_members WHERE uid = $1`, uid)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *GroupMemberStore) DeleteByGroupTx(tx *sql.Tx, groupID string) (int64, error) {
+	res, err := tx.Exec(`DELETE FROM group_members WHERE group_id = $1`, groupID)
 	if err != nil {
 		return 0, err
 	}
@@ -656,6 +802,18 @@ func (s *FriendRequestStore) GetPendingRequests(userID int64) ([]*FriendRequest,
 	return scanFriendRequests(rows)
 }
 
+func (s *FriendRequestStore) HasPendingRequests(userID int64) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM friend_requests
+			WHERE (from_user_id = $1 OR to_user_id = $1) AND status = 'pending'
+		)`,
+		userID,
+	).Scan(&exists)
+	return exists, err
+}
+
 func (s *FriendRequestStore) Insert(req *FriendRequest) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(`
@@ -703,6 +861,76 @@ func (s *FriendRequestStore) DeleteByUserTx(tx *sql.Tx, userID int64) (int64, er
 	return res.RowsAffected()
 }
 
+func (s *FriendRequestStore) AcceptPendingTx(tx *sql.Tx, fromUserID, toUserID int64) (int64, error) {
+	var id int64
+	now := time.Now().UnixMilli()
+	err := tx.QueryRow(`
+		UPDATE friend_requests
+		SET status = 'accepted', updated_at = $1
+		WHERE from_user_id = $2 AND to_user_id = $3 AND status = 'pending'
+		RETURNING id`,
+		now, fromUserID, toUserID,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return id, err
+}
+
+func (s *FriendRequestStore) AcceptByIDTx(tx *sql.Tx, requestID, userID int64) (fromUserID int64, err error) {
+	var exists bool
+	err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM friend_requests WHERE id = $1)`, requestID).Scan(&exists)
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+
+	now := time.Now().UnixMilli()
+	err = tx.QueryRow(`
+		UPDATE friend_requests
+		SET status = 'accepted', updated_at = $1
+		WHERE id = $2 AND to_user_id = $3 AND status = 'pending'
+		RETURNING from_user_id`,
+		now, requestID, userID,
+	).Scan(&fromUserID)
+	if err == sql.ErrNoRows {
+		return -1, nil
+	}
+	return fromUserID, err
+}
+
+func (s *FriendRequestStore) RejectTx(tx *sql.Tx, requestID, userID int64) (bool, error) {
+	now := time.Now().UnixMilli()
+	var id int64
+	err := tx.QueryRow(`
+		UPDATE friend_requests
+		SET status = 'rejected', updated_at = $1
+		WHERE id = $2 AND to_user_id = $3 AND status = 'pending'
+		RETURNING id`,
+		now, requestID, userID,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return true, err
+}
+
+func (s *FriendRequestStore) CancelTx(tx *sql.Tx, requestID, userID int64) (bool, error) {
+	var id int64
+	err := tx.QueryRow(`
+		DELETE FROM friend_requests
+		WHERE id = $1 AND from_user_id = $2 AND status = 'pending'
+		RETURNING id`,
+		requestID, userID,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return true, err
+}
+
 // ==================== ConversationParticipantStore ====================
 
 type ConversationParticipantStore struct {
@@ -718,6 +946,15 @@ func (s *ConversationParticipantStore) Exists(convID string, userID int64) (bool
 	return exists, err
 }
 
+func (s *ConversationParticipantStore) ExistsTx(tx *sql.Tx, convID string, userID int64) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM conversation_participants WHERE conv_id = $1 AND user_id = $2)`,
+		convID, userID,
+	).Scan(&exists)
+	return exists, err
+}
+
 func (s *ConversationParticipantStore) InsertBatch(participants []*ConversationParticipant) (int64, error) {
 	if len(participants) == 0 {
 		return 0, nil
@@ -726,7 +963,11 @@ func (s *ConversationParticipantStore) InsertBatch(participants []*ConversationP
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO conversation_participants (conv_id, user_id, join_ts)
@@ -747,7 +988,38 @@ func (s *ConversationParticipantStore) InsertBatch(participants []*ConversationP
 		count += n
 	}
 
-	return count, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	tx = nil
+	return count, nil
+}
+
+func (s *ConversationParticipantStore) InsertBatchTx(tx *sql.Tx, participants []*ConversationParticipant) (int64, error) {
+	if len(participants) == 0 {
+		return 0, nil
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO conversation_participants (conv_id, user_id, join_ts)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (conv_id, user_id) DO NOTHING`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	var count int64
+	for _, p := range participants {
+		res, err := stmt.Exec(p.ConvID, p.UserID, p.JoinTs)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		count += n
+	}
+
+	return count, nil
 }
 
 // ==================== IdGeneratorStateStore ====================
@@ -758,6 +1030,11 @@ type IdGeneratorStateStore struct {
 
 func (s *IdGeneratorStateStore) GetFirst() (*IdGeneratorState, error) {
 	row := s.db.QueryRow(`SELECT id, last_ts FROM id_generator_state ORDER BY id LIMIT 1`)
+	return scanIdGenState(row)
+}
+
+func (s *IdGeneratorStateStore) GetFirstForUpdate(tx *sql.Tx) (*IdGeneratorState, error) {
+	row := tx.QueryRow(`SELECT id, last_ts FROM id_generator_state ORDER BY id LIMIT 1 FOR UPDATE`)
 	return scanIdGenState(row)
 }
 
@@ -774,6 +1051,29 @@ func (s *IdGeneratorStateStore) Insert(state *IdGeneratorState) (int64, error) {
 
 func (s *IdGeneratorStateStore) Update(state *IdGeneratorState) (int64, error) {
 	res, err := s.db.Exec(`
+		UPDATE id_generator_state SET last_ts = $1
+		WHERE id = $2`,
+		state.LastTs, state.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *IdGeneratorStateStore) InsertWithTx(tx *sql.Tx, state *IdGeneratorState) (int64, error) {
+	var id int64
+	err := tx.QueryRow(`
+		INSERT INTO id_generator_state (last_ts)
+		VALUES ($1)
+		RETURNING id`,
+		state.LastTs,
+	).Scan(&id)
+	return id, err
+}
+
+func (s *IdGeneratorStateStore) UpdateWithTx(tx *sql.Tx, state *IdGeneratorState) (int64, error) {
+	res, err := tx.Exec(`
 		UPDATE id_generator_state SET last_ts = $1
 		WHERE id = $2`,
 		state.LastTs, state.ID,

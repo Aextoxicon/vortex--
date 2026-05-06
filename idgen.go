@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,35 +35,36 @@ func (s *IdSegment) Remaining() int {
 }
 
 type IdGenerator struct {
-	nodeID   int64
-	mu       sync.Mutex
-	segMu    sync.Mutex
-	segments []*IdSegment
+	cfg        *Config
+	nodeID     int64
+	mu         sync.Mutex
+	segments   []*IdSegment
 	prefetchCh chan struct{}
-	idGenSt  *IdGeneratorStateStore
-	msgSt    *MessageStore
-	initOnce sync.Once
-	initDone chan struct{}
+	idGenSt    *IdGeneratorStateStore
+	msgSt      *MessageStore
+	initOnce   sync.Once
+	initDone   chan struct{}
 }
 
-func NewIdGenerator(idGenSt *IdGeneratorStateStore, msgSt *MessageStore, nodeID int64) *IdGenerator {
+func NewIdGenerator(cfg *Config, idGenSt *IdGeneratorStateStore, msgSt *MessageStore, nodeID int64) *IdGenerator {
 	return &IdGenerator{
-		nodeID:   nodeID,
-		segments: make([]*IdSegment, 0, 2),
+		cfg:        cfg,
+		nodeID:     nodeID,
+		segments:   make([]*IdSegment, 0, 2),
 		prefetchCh: make(chan struct{}, 1),
-		idGenSt:  idGenSt,
-		msgSt:    msgSt,
-		initDone: make(chan struct{}),
+		idGenSt:    idGenSt,
+		msgSt:      msgSt,
+		initDone:   make(chan struct{}),
 	}
 }
 
 func (g *IdGenerator) Init() {
 	g.initOnce.Do(func() {
 		if err := g.initFromDB(); err != nil {
-			log.Printf("id generator init warning: %v", err)
+			slog.Warn("id generator init warning", "error", err)
 		}
 		if err := g.fetchNewSegment(); err != nil {
-			log.Printf("id generator first segment fetch failed: %v", err)
+			slog.Error("id generator first segment fetch failed", "error", err)
 		}
 		close(g.initDone)
 	})
@@ -104,7 +105,7 @@ func (g *IdGenerator) initFromDB() error {
 	}
 
 	initState := &IdGeneratorState{
-		LastTs: startTs + Cfg.SegmentDurationMs,
+		LastTs: startTs + g.cfg.SegmentDurationMs,
 	}
 
 	_, err = g.idGenSt.Insert(initState)
@@ -117,7 +118,7 @@ func (g *IdGenerator) GenerateID() (int64, error) {
 	for {
 		seg := g.peekSegment()
 		if seg == nil {
-			if err := g.fetchNewSegment(); err != nil {
+			if err := g.fetchNewSegmentSync(); err != nil {
 				return 0, err
 			}
 			continue
@@ -130,6 +131,9 @@ func (g *IdGenerator) GenerateID() (int64, error) {
 		}
 
 		g.popSegment()
+		if err := g.fetchNewSegmentSync(); err != nil {
+			return 0, err
+		}
 	}
 }
 
@@ -151,57 +155,57 @@ func (g *IdGenerator) popSegment() {
 }
 
 func (g *IdGenerator) tryPrefetch(current *IdSegment) {
-	if int64(current.Remaining()) > Cfg.SegmentSize/4 || len(g.segments) >= 2 {
+	g.mu.Lock()
+	if int64(current.Remaining()) > g.cfg.SegmentSize/4 || len(g.segments) >= 2 {
+		g.mu.Unlock()
 		return
 	}
+	g.mu.Unlock()
+
 	select {
 	case g.prefetchCh <- struct{}{}:
 		go func() {
 			defer func() { <-g.prefetchCh }()
-			if err := g.fetchNewSegment(); err != nil {
-				log.Printf("prefetch segment failed: %v", err)
-			}
+			_ = g.fetchNewSegmentSync()
 		}()
 	default:
 	}
 }
 
-func (g *IdGenerator) fetchNewSegment() error {
+func (g *IdGenerator) fetchNewSegmentSync() error {
 	g.mu.Lock()
-	if len(g.segments) >= 2 {
-		g.mu.Unlock()
+	defer g.mu.Unlock()
+
+	if len(g.segments) >= 1 {
 		return nil
 	}
-	g.mu.Unlock()
 
-	g.segMu.Lock()
-	defer g.segMu.Unlock()
+	return g.fetchNewSegmentLocked()
+}
 
-	state, err := g.idGenSt.GetFirst()
+func (g *IdGenerator) fetchNewSegmentLocked() error {
+	tx, err := g.msgSt.DB().Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	state, err := g.idGenSt.GetFirstForUpdate(tx)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	now := time.Now().UnixMilli()
-
 	var startTs int64
 	if state != nil {
-		if now < state.LastTs {
-			drift := state.LastTs - now
-			if drift <= 500 {
-				time.Sleep(time.Duration(drift) * time.Millisecond)
-				now = time.Now().UnixMilli()
-			}
-		}
-		startTs = max(now, state.LastTs)
+		startTs = state.LastTs + 1
 	} else {
-		startTs = now
+		startTs = time.Now().UnixMilli()
 	}
 
-	endTs := startTs + Cfg.SegmentDurationMs
+	endTs := startTs + g.cfg.SegmentDurationMs
 
 	startID := (startTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift)
-	endID := (endTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift) | (1<<vfSequenceBits - 1)
+	endID := (endTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift) | vfMaxSequence
 
 	seg := &IdSegment{
 		StartID: startID,
@@ -214,20 +218,26 @@ func (g *IdGenerator) fetchNewSegment() error {
 
 	if state != nil {
 		state.LastTs = endTs
-		_, err = g.idGenSt.Update(state)
+		_, err = g.idGenSt.UpdateWithTx(tx, state)
 	} else {
 		newState := &IdGeneratorState{LastTs: endTs}
-		_, err = g.idGenSt.Insert(newState)
+		_, err = g.idGenSt.InsertWithTx(tx, newState)
 	}
 	if err != nil {
 		return fmt.Errorf("persist state: %w", err)
 	}
 
-	g.mu.Lock()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+
 	g.segments = append(g.segments, seg)
-	g.mu.Unlock()
 
 	return nil
+}
+
+func (g *IdGenerator) fetchNewSegment() error {
+	return g.fetchNewSegmentSync()
 }
 
 func (g *IdGenerator) GetNodeID() int64 {

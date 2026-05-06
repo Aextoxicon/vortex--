@@ -28,7 +28,7 @@ type UpdateUserRequest struct {
 func (h *Handler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_input"})
+		handleError(c, ErrInvalidInput)
 		return
 	}
 
@@ -46,7 +46,7 @@ func (h *Handler) Register(c *gin.Context) {
 
 	token, err := h.jwt.GenerateToken(user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "token generation failed"})
+		handleError(c, ErrTokenGeneration)
 		return
 	}
 
@@ -61,24 +61,24 @@ func (h *Handler) Register(c *gin.Context) {
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_input"})
+		handleError(c, ErrInvalidInput)
 		return
 	}
 
 	user, err := h.svc.GetUserByUsername(req.Username)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Invalid username or password"})
+		handleError(c, ErrInvalidCredentials)
 		return
 	}
 
 	if err := h.svc.ValidateCredentials(user, req.Password); err != nil {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Invalid username or password"})
+		handleError(c, ErrInvalidCredentials)
 		return
 	}
 
 	token, err := h.jwt.GenerateToken(user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "token generation failed"})
+		handleError(c, ErrTokenGeneration)
 		return
 	}
 
@@ -110,13 +110,13 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	publicID := c.Param("publicId")
 	currentPublicID := c.GetString("public_id")
 	if currentPublicID != publicID {
-		c.JSON(http.StatusForbidden, ErrorResponse{Error: "forbidden"})
+		handleError(c, ErrForbidden)
 		return
 	}
 
 	var req UpdateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_input"})
+		handleError(c, ErrInvalidInput)
 		return
 	}
 
@@ -149,7 +149,7 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	publicID := c.Param("publicId")
 	currentPublicID := c.GetString("public_id")
 	if currentPublicID != publicID {
-		c.JSON(http.StatusForbidden, ErrorResponse{Error: "forbidden"})
+		handleError(c, ErrForbidden)
 		return
 	}
 
@@ -232,12 +232,12 @@ func (s *Service) CreateUser(username, password, email string) (int64, error) {
 		}
 	}
 
-	pwdHash, err := bcrypt.GenerateFromPassword([]byte(password), Cfg.BCryptCost)
+	pwdHash, err := bcrypt.GenerateFromPassword([]byte(password), s.cfg.BCryptCost)
 	if err != nil {
 		return 0, fmt.Errorf("password hashing failed: %w", err)
 	}
 
-	publicID := GenerateNanoID(Cfg.PublicIDLength)
+	publicID := GenerateNanoID(s.cfg.PublicIDLength)
 
 	now := time.Now().UnixMilli()
 	user := &User{
@@ -272,23 +272,38 @@ func (s *Service) DeleteUser(userID int64) error {
 		return ErrNotFound
 	}
 
+	groups, err := s.groupStore.GetGroupsByOwner(userID)
+	if err != nil {
+		return err
+	}
+	for _, g := range groups {
+		if err := s.DeleteGroup(g.GroupID); err != nil {
+			return fmt.Errorf("failed to delete group %s: %w", g.GroupID, err)
+		}
+	}
+
 	tx, err := s.userStore.DB().Begin()
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
 
 	if err := s.DeleteFriendRequestsByUser(tx, userID); err != nil {
-		return err
-	}
-	if err := s.DeleteGroupMembersByUser(tx, userID); err != nil {
 		return err
 	}
 	if _, err := s.userStore.DeleteTx(tx, userID); err != nil {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	tx = nil
+	return nil
 }
 
 func (s *Service) ValidateCredentials(user *User, password string) error {

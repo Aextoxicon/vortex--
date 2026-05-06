@@ -1,10 +1,11 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,14 +34,18 @@ func (h *Handler) SendMessage(c *gin.Context) {
 
 	var req SendMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_input"})
+		handleError(c, ErrInvalidInput)
 		return
 	}
 
 	content := req.Content
 	if req.ContentType == "image" {
 		img := ImageContent{Type: "image", Content: req.Content, Text: req.Text}
-		data, _ := json.Marshal(img)
+		data, err := json.Marshal(img)
+		if err != nil {
+			handleError(c, ErrInternalServer)
+			return
+		}
 		content = string(data)
 	}
 
@@ -60,12 +65,15 @@ func (h *Handler) GetMessages(c *gin.Context) {
 	convID := c.Query("convId")
 	dateStr := c.Query("date")
 	days := 1
-	pageSize := Cfg.DefaultPageSize
-	offset := 0
+	pageSize := h.cfg.DefaultPageSize
+	var lastMsgId int64
 
 	if v := c.Query("days"); v != "" {
-		if n, err := fmt.Sscanf(v, "%d", &days); err != nil || n != 1 {
-			days = 1
+		if n, err := strconv.Atoi(v); err == nil {
+			days = n
+		} else {
+			handleError(c, ErrInvalidInput)
+			return
 		}
 	}
 	if days < 1 {
@@ -76,16 +84,22 @@ func (h *Handler) GetMessages(c *gin.Context) {
 	}
 
 	if v := c.Query("pageSize"); v != "" {
-		if n, err := fmt.Sscanf(v, "%d", &pageSize); err != nil || n != 1 {
-			pageSize = Cfg.DefaultPageSize
+		if n, err := strconv.Atoi(v); err == nil {
+			pageSize = n
+		} else {
+			handleError(c, ErrInvalidInput)
+			return
 		}
 	}
-	if pageSize > Cfg.MaxPageSize {
-		pageSize = Cfg.MaxPageSize
+	if pageSize > h.cfg.MaxPageSize {
+		pageSize = h.cfg.MaxPageSize
 	}
-	if v := c.Query("offset"); v != "" {
-		if n, err := fmt.Sscanf(v, "%d", &offset); err != nil || n != 1 {
-			offset = 0
+	if v := c.Query("lastMsgId"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			lastMsgId = n
+		} else {
+			handleError(c, ErrInvalidInput)
+			return
 		}
 	}
 
@@ -94,41 +108,36 @@ func (h *Handler) GetMessages(c *gin.Context) {
 		var err error
 		date, err = time.Parse("2006-01-02", dateStr)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid date format, use YYYY-MM-DD"})
+			handleError(c, ErrInvalidDateFormat)
 			return
 		}
 	} else {
 		date = time.Now()
 	}
 
-	messages, err := h.svc.GetConversationMessages(convID, date, days, pageSize, offset, userID)
+	messages, err := h.svc.GetConversationMessages(convID, date, days, pageSize, lastMsgId, userID)
 	if err != nil {
 		handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"messages": messages})
+	c.JSON(http.StatusOK, gin.H{
+		"messages":   messages.Messages,
+		"has_more":   messages.HasMore,
+		"max_msg_id": messages.MaxMsgID,
+	})
 }
 
 func (h *Handler) RecallMessage(c *gin.Context) {
 	userID := c.GetInt64("user_id")
 
-	var msgID int64
-	if _, err := fmt.Sscanf(c.Param("msgId"), "%d", &msgID); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid msg_id"})
+	msgID, err := strconv.ParseInt(c.Param("msgId"), 10, 64)
+	if err != nil {
+		handleError(c, ErrInvalidMsgID)
 		return
 	}
 
-	var msgTimestamp int64
-	tsStr := c.Query("msgTimestamp")
-	if tsStr == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "msgTimestamp is required"})
-		return
-	}
-	if _, err := fmt.Sscanf(tsStr, "%d", &msgTimestamp); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid msgTimestamp"})
-		return
-	}
+	msgTimestamp := h.svc.idGen.ExtractTimestampFromMsgID(msgID)
 
 	if err := h.svc.RecallMessage(msgID, msgTimestamp, userID); err != nil {
 		handleError(c, err)
@@ -136,6 +145,28 @@ func (h *Handler) RecallMessage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, SuccessResponse{Success: true, Message: "Message recalled successfully"})
+}
+
+func (h *Handler) CheckNewMessages(c *gin.Context) {
+	userID := c.GetInt64("user_id")
+
+	var lastMsgID int64
+	if v := c.Query("lastMsgId"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			lastMsgID = n
+		} else {
+			handleError(c, ErrInvalidInput)
+			return
+		}
+	}
+
+	result, err := h.svc.CheckNewMessages(userID, lastMsgID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": result})
 }
 
 func (s *Service) SendMessage(currentUser *User, targetPublicID, msgType, content string) (*SendMessageResult, error) {
@@ -146,16 +177,12 @@ func (s *Service) SendMessage(currentUser *User, targetPublicID, msgType, conten
 		return nil, err
 	}
 
-	if err := s.ensureSessionPermission(uid, convID, msgType, targetPublicID); err != nil {
-		return nil, err
-	}
-
 	msgID, err := s.idGen.GenerateID()
 	if err != nil {
 		return nil, err
 	}
 
-	ts := time.Now().UnixMilli() - Cfg.EpochTime
+	ts := time.Now().UnixMilli() - s.cfg.EpochTime
 	tableName := MessageTableNameByTs(ts)
 
 	msg := &Message{
@@ -166,10 +193,29 @@ func (s *Service) SendMessage(currentUser *User, targetPublicID, msgType, conten
 		Ts:      ts,
 	}
 
-	_, err = s.msgStore.InsertMessage(tableName, msg)
+	tx, err := s.msgStore.DB().Begin()
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := s.ensureSessionPermissionTx(tx, uid, convID, msgType, targetPublicID); err != nil {
+		return nil, err
+	}
+
+	_, err = s.msgStore.InsertMessageTx(tx, tableName, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	tx = nil
 
 	result := &SendMessageResult{
 		MsgID:   fmt.Sprintf("%d", msgID),
@@ -194,7 +240,7 @@ func (s *Service) GetMessage(msgID, msgTimestamp int64) (*Message, error) {
 	return msg, nil
 }
 
-func (s *Service) GetConversationMessages(convID string, endDate time.Time, days, pageSize, offset int, userID int64) ([]*Message, error) {
+func (s *Service) GetConversationMessages(convID string, endDate time.Time, days, pageSize int, lastMsgId int64, userID int64) (*MessagePage, error) {
 	hasPerm, err := s.convPartStore.Exists(convID, userID)
 	if err != nil {
 		return nil, err
@@ -214,40 +260,40 @@ func (s *Service) GetConversationMessages(convID string, endDate time.Time, days
 		}
 	}
 
-	var allMsgs []*Message
 	startDate := endDate.AddDate(0, 0, -(days - 1))
+	startTs := startDate.UnixMilli() - s.cfg.EpochTime
+	endTs := endDate.AddDate(0, 0, 1).UnixMilli() - s.cfg.EpochTime
 
-	for d := startDate; !d.After(endDate); d = d.AddDate(0, 0, 1) {
-		tableName := MessageTableNameByDate(d)
-		msgs, err := s.msgStore.GetConversationMessages(tableName, convID, pageSize+offset, 0)
-		if err != nil {
-			continue
-		}
-		allMsgs = append(allMsgs, msgs...)
+	return s.msgStore.GetConversationMessagesByRange(convID, startTs, endTs, pageSize, lastMsgId)
+}
+
+func (s *Service) CheckNewMessages(userID, lastMsgID int64) (int, error) {
+	hasNewMessages, err := s.msgStore.HasNewMessagesAfter(userID, lastMsgID)
+	if err != nil {
+		return 0, err
 	}
 
-	sort.Slice(allMsgs, func(i, j int) bool {
-		return allMsgs[i].Ts > allMsgs[j].Ts
-	})
-
-	if offset > 0 && offset < len(allMsgs) {
-		allMsgs = allMsgs[offset:]
-	} else if offset >= len(allMsgs) {
-		allMsgs = nil
+	hasPendingRequests, err := s.friendStore.HasPendingRequests(userID)
+	if err != nil {
+		return 0, err
 	}
 
-	if len(allMsgs) > pageSize {
-		allMsgs = allMsgs[:pageSize]
+	status := 0
+	if hasNewMessages {
+		status |= 1
+	}
+	if hasPendingRequests {
+		status |= 2
 	}
 
-	return allMsgs, nil
+	return status, nil
 }
 
 func (s *Service) RecallMessage(msgID, msgTimestamp, userID int64) error {
 	now := time.Now().UnixMilli()
 	msgAge := now - msgTimestamp
-	if msgAge > Cfg.MessageRecallWindowMs {
-		return ErrInvalidInput
+	if msgAge > s.cfg.MessageRecallWindowMs {
+		return ErrRecallWindowExpired
 	}
 
 	tableName := MessageTableNameByTs(msgTimestamp)
@@ -283,7 +329,7 @@ func (s *Service) generateConversationID(msgType string, uid int64, targetPublic
 		}
 		return PrivateConvID(uid, targetUser.ID), nil
 	case "g", "group":
-		if !IsValidGroupID(targetPublicID) {
+		if !s.IsValidGroupID(targetPublicID) {
 			return "", ErrInvalidType
 		}
 		return targetPublicID, nil
@@ -318,6 +364,51 @@ func (s *Service) ensureSessionPermission(uid int64, convID, msgType, targetPubl
 				{ConvID: convID, UserID: targetUser.ID, JoinTs: now},
 			}
 			_, err = s.convPartStore.InsertBatch(participants)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	case "g", "group":
+		isMember, err := s.IsUserInGroup(targetPublicID, uid)
+		if err != nil {
+			return err
+		}
+		if !isMember {
+			return ErrNotMember
+		}
+		return nil
+	default:
+		return ErrInvalidType
+	}
+}
+
+func (s *Service) ensureSessionPermissionTx(tx *sql.Tx, uid int64, convID, msgType, targetPublicID string) error {
+	switch msgType {
+	case "p", "user":
+		if !CanAccessPrivateConv(convID, uid) {
+			return ErrForbidden
+		}
+
+		hasPerm, err := s.convPartStore.ExistsTx(tx, convID, uid)
+		if err != nil {
+			return err
+		}
+		if !hasPerm {
+			targetUser, err := s.GetUserByPublicID(targetPublicID)
+			if err != nil {
+				return err
+			}
+			if targetUser == nil {
+				return ErrInvalidTargetID
+			}
+
+			now := time.Now().UnixMilli()
+			participants := []*ConversationParticipant{
+				{ConvID: convID, UserID: uid, JoinTs: now},
+				{ConvID: convID, UserID: targetUser.ID, JoinTs: now},
+			}
+			_, err = s.convPartStore.InsertBatchTx(tx, participants)
 			if err != nil {
 				return err
 			}

@@ -2,7 +2,7 @@ package main
 
 import (
 	"database/sql"
-	"log"
+	"log/slog"
 )
 
 func RunMigrations(db *sql.DB) error {
@@ -23,7 +23,7 @@ func RunMigrations(db *sql.DB) error {
 		}
 	}
 
-	log.Println("migrations completed successfully")
+	slog.Info("migrations completed successfully")
 	return nil
 }
 
@@ -65,7 +65,7 @@ func createGroupMembersTable(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS group_members (
 			id BIGSERIAL PRIMARY KEY,
 			group_id TEXT NOT NULL,
-			uid BIGINT NOT NULL,
+			uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			role TEXT NOT NULL,
 			joined_at BIGINT NOT NULL,
 			UNIQUE (group_id, uid)
@@ -97,7 +97,7 @@ func createConversationParticipantsTable(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS conversation_participants (
 			conv_id TEXT NOT NULL,
-			user_id BIGINT NOT NULL,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			join_ts BIGINT NOT NULL,
 			PRIMARY KEY (conv_id, user_id)
 		);

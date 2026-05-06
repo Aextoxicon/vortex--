@@ -2,20 +2,22 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
 
 type Worker struct {
+	cfg      *Config
 	svc      *Service
 	msgStore *MessageStore
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
 }
 
-func NewWorker(svc *Service, msgStore *MessageStore) *Worker {
+func NewWorker(cfg *Config, svc *Service, msgStore *MessageStore) *Worker {
 	return &Worker{
+		cfg:      cfg,
 		svc:      svc,
 		msgStore: msgStore,
 		stopCh:   make(chan struct{}),
@@ -26,13 +28,13 @@ func (w *Worker) Start() {
 	w.wg.Add(2)
 	go w.runTableManager()
 	go w.runMaintenance()
-	log.Println("Worker started")
+	slog.Info("Worker started")
 }
 
 func (w *Worker) Stop() {
 	close(w.stopCh)
 	w.wg.Wait()
-	log.Println("Worker stopped")
+	slog.Info("Worker stopped")
 }
 
 // ==================== TableManager ====================
@@ -49,7 +51,7 @@ func (w *Worker) runTableManager() {
 		return
 	}
 
-	ticker := time.NewTicker(time.Duration(Cfg.WorkerTableCreateIntervalHours) * time.Hour)
+	ticker := time.NewTicker(time.Duration(w.cfg.WorkerTableCreateIntervalHours) * time.Hour)
 	defer ticker.Stop()
 
 	for {
@@ -74,22 +76,28 @@ func (w *Worker) createTablesFromTodayToSunday() {
 		date := now.AddDate(0, 0, offset)
 		tableName := MessageTableNameByDate(date)
 		if _, err := w.msgStore.CreateMessageTable(tableName); err != nil {
-			log.Printf("failed to create table %s: %v", tableName, err)
+			slog.Error("failed to create table", "table", tableName, "error", err)
 		}
 	}
-	log.Println("initial message tables created")
+	slog.Info("initial message tables created")
 }
 
 func (w *Worker) createWeekTables() {
 	now := time.Now().UTC()
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	nextMonday := now.AddDate(0, 0, 8-weekday)
+
 	for offset := 0; offset < 7; offset++ {
-		date := now.AddDate(0, 0, offset)
+		date := nextMonday.AddDate(0, 0, offset)
 		tableName := MessageTableNameByDate(date)
 		if _, err := w.msgStore.CreateMessageTable(tableName); err != nil {
-			log.Printf("failed to create table %s: %v", tableName, err)
+			slog.Error("failed to create table", "table", tableName, "error", err)
 		}
 	}
-	log.Println("weekly message tables created")
+	slog.Info("weekly message tables created")
 }
 
 func calculateNextMondayDelay() time.Duration {
@@ -109,12 +117,12 @@ func (w *Worker) runMaintenance() {
 	defer w.wg.Done()
 
 	select {
-	case <-time.After(time.Duration(Cfg.WorkerMaintenanceInitialDelayMinutes) * time.Minute):
+	case <-time.After(time.Duration(w.cfg.WorkerMaintenanceInitialDelayMinutes) * time.Minute):
 	case <-w.stopCh:
 		return
 	}
 
-	ticker := time.NewTicker(time.Duration(Cfg.WorkerMaintenanceIntervalHours) * time.Hour)
+	ticker := time.NewTicker(time.Duration(w.cfg.WorkerMaintenanceIntervalHours) * time.Hour)
 	defer ticker.Stop()
 
 	for {
@@ -131,14 +139,14 @@ func (w *Worker) runMaintenance() {
 func (w *Worker) runAnalyze() {
 	_, err := w.msgStore.DB().Exec("ANALYZE messages")
 	if err != nil {
-		log.Printf("maintenance: ANALYZE failed: %v", err)
+		slog.Error("maintenance: ANALYZE failed", "error", err)
 		return
 	}
-	log.Println("maintenance: ANALYZE completed")
+	slog.Info("maintenance: ANALYZE completed")
 }
 
 func (w *Worker) dropExpiredPartitions() {
-	retentionDays := Cfg.MessageRetentionDays
+	retentionDays := w.cfg.MessageRetentionDays
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 
 	rows, err := w.msgStore.DB().Query(`
@@ -147,7 +155,7 @@ func (w *Worker) dropExpiredPartitions() {
 		WHERE inhparent = 'messages'::regclass
 	`)
 	if err != nil {
-		log.Printf("maintenance: failed to list partitions: %v", err)
+		slog.Error("maintenance: failed to list partitions", "error", err)
 		return
 	}
 	defer rows.Close()
@@ -156,7 +164,7 @@ func (w *Worker) dropExpiredPartitions() {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			log.Printf("maintenance: failed to scan partition name: %v", err)
+			slog.Error("maintenance: failed to scan partition name", "error", err)
 			continue
 		}
 		partitions = append(partitions, name)
@@ -175,16 +183,16 @@ func (w *Worker) dropExpiredPartitions() {
 			var quoted string
 			err := w.msgStore.DB().QueryRow("SELECT quote_ident($1)", partition).Scan(&quoted)
 			if err != nil {
-				log.Printf("maintenance: failed to quote partition name %s: %v", partition, err)
+				slog.Error("maintenance: failed to quote partition name", "partition", partition, "error", err)
 				continue
 			}
 			_, err = w.msgStore.DB().Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", quoted))
 			if err != nil {
-				log.Printf("maintenance: failed to drop partition %s: %v", partition, err)
+				slog.Error("maintenance: failed to drop partition", "partition", partition, "error", err)
 				continue
 			}
-			log.Printf("maintenance: dropped partition %s", partition)
+			slog.Info("maintenance: dropped partition", "partition", partition)
 		}
 	}
-	log.Println("maintenance: drop expired partitions completed")
+	slog.Info("maintenance: drop expired partitions completed")
 }

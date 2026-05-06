@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lib/pq"
 )
 
 func (h *Handler) SendFriendRequest(c *gin.Context) {
@@ -17,7 +19,7 @@ func (h *Handler) SendFriendRequest(c *gin.Context) {
 
 	targetUser, err := h.svc.GetUserByPublicID(targetPublicID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "Target user not found"})
+		handleError(c, ErrNotFound)
 		return
 	}
 
@@ -33,9 +35,9 @@ func (h *Handler) SendFriendRequest(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"id":               requestID,
-		"status":           status,
-		"sender_public_id": publicID,
+		"id":                 requestID,
+		"status":             status,
+		"sender_public_id":   publicID,
 		"receiver_public_id": targetPublicID,
 	})
 }
@@ -45,13 +47,13 @@ func (h *Handler) GetFriendRequests(c *gin.Context) {
 
 	sent, err := h.svc.GetSentRequests(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to get requests"})
+		handleError(c, ErrGetRequestsFailed)
 		return
 	}
 
 	received, err := h.svc.GetReceivedRequests(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to get requests"})
+		handleError(c, ErrGetRequestsFailed)
 		return
 	}
 
@@ -82,9 +84,9 @@ func (h *Handler) GetFriendRequests(c *gin.Context) {
 }
 
 func (h *Handler) AcceptFriendRequest(c *gin.Context) {
-	var requestID int64
-	if _, err := fmt.Sscanf(c.Param("requestId"), "%d", &requestID); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_request_id"})
+	requestID, err := strconv.ParseInt(c.Param("requestId"), 10, 64)
+	if err != nil {
+		handleError(c, ErrInvalidInput)
 		return
 	}
 	userID := c.GetInt64("user_id")
@@ -98,9 +100,9 @@ func (h *Handler) AcceptFriendRequest(c *gin.Context) {
 }
 
 func (h *Handler) RejectFriendRequest(c *gin.Context) {
-	var requestID int64
-	if _, err := fmt.Sscanf(c.Param("requestId"), "%d", &requestID); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_request_id"})
+	requestID, err := strconv.ParseInt(c.Param("requestId"), 10, 64)
+	if err != nil {
+		handleError(c, ErrInvalidInput)
 		return
 	}
 	userID := c.GetInt64("user_id")
@@ -114,9 +116,9 @@ func (h *Handler) RejectFriendRequest(c *gin.Context) {
 }
 
 func (h *Handler) CancelFriendRequest(c *gin.Context) {
-	var requestID int64
-	if _, err := fmt.Sscanf(c.Param("requestId"), "%d", &requestID); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_request_id"})
+	requestID, err := strconv.ParseInt(c.Param("requestId"), 10, 64)
+	if err != nil {
+		handleError(c, ErrInvalidInput)
 		return
 	}
 	userID := c.GetInt64("user_id")
@@ -139,25 +141,28 @@ func (s *Service) SendFriendRequest(fromUserID, toUserID int64, message string) 
 		return 0, false, err
 	}
 
-	existing, err := s.friendStore.GetByUsers(fromUserID, toUserID)
+	tx, err := s.friendStore.DB().Begin()
 	if err != nil {
 		return 0, false, err
 	}
-	if existing != nil {
-		return 0, false, ErrConflict
-	}
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
 
-	reverse, err := s.friendStore.GetByUsers(toUserID, fromUserID)
+	reverseID, err := s.friendStore.AcceptPendingTx(tx, toUserID, fromUserID)
 	if err != nil {
 		return 0, false, err
 	}
-	if reverse != nil && reverse.Status == "pending" {
-		reverse.Status = "accepted"
-		reverse.UpdatedAt = time.Now().UnixMilli()
-		if _, err := s.friendStore.Update(reverse); err != nil {
+	if reverseID > 0 {
+		if err := tx.Commit(); err != nil {
 			return 0, false, err
 		}
-		_ = s.SendFriendAcceptedNotification(fromUserID, toUserID, fmt.Sprintf("%d", reverse.ID))
+		tx = nil
+		goSafe(func() {
+			_ = s.SendFriendAcceptedNotification(fromUserID, toUserID, fmt.Sprintf("%d", reverseID))
+		})
 		return 0, true, nil
 	}
 
@@ -172,14 +177,29 @@ func (s *Service) SendFriendRequest(fromUserID, toUserID int64, message string) 
 
 	result, err := s.friendStore.Insert(req)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return 0, false, ErrConflict
+		}
 		return 0, false, err
 	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, false, err
+	}
+	tx = nil
 
 	goSafe(func() {
 		_ = s.SendFriendNotification(toUserID, fromUserID, fmt.Sprintf("%d", result))
 	})
 
 	return result, false, nil
+}
+
+func isUniqueViolation(err error) bool {
+	if pqErr, ok := err.(*pq.Error); ok {
+		return pqErr.Code == "23505"
+	}
+	return false
 }
 
 func (s *Service) GetFriendRequestByID(requestID int64) (*FriendRequest, error) {
@@ -202,72 +222,89 @@ func (s *Service) GetReceivedRequests(toUserID int64) ([]*FriendRequest, error) 
 }
 
 func (s *Service) AcceptFriendRequest(requestID, userID int64) error {
-	req, err := s.friendStore.GetByID(requestID)
+	tx, err := s.friendStore.DB().Begin()
 	if err != nil {
 		return err
 	}
-	if req == nil {
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromUserID, err := s.friendStore.AcceptByIDTx(tx, requestID, userID)
+	if err != nil {
+		return err
+	}
+	if fromUserID == 0 {
 		return ErrNotFound
 	}
-	if req.ToUserID != userID {
+	if fromUserID < 0 {
 		return ErrForbidden
 	}
-	if req.Status != "pending" {
-		return ErrNotPending
-	}
 
-	req.Status = "accepted"
-	req.UpdatedAt = time.Now().UnixMilli()
-	_, err = s.friendStore.Update(req)
-	if err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
+	tx = nil
 
 	goSafe(func() {
-		_ = s.SendFriendAcceptedNotification(req.FromUserID, req.ToUserID, fmt.Sprintf("%d", req.ID))
+		_ = s.SendFriendAcceptedNotification(fromUserID, userID, fmt.Sprintf("%d", requestID))
 	})
 
 	return nil
 }
 
 func (s *Service) RejectFriendRequest(requestID, userID int64) error {
-	req, err := s.friendStore.GetByID(requestID)
+	tx, err := s.friendStore.DB().Begin()
 	if err != nil {
 		return err
 	}
-	if req == nil {
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
+
+	affected, err := s.friendStore.RejectTx(tx, requestID, userID)
+	if err != nil {
+		return err
+	}
+	if !affected {
 		return ErrNotFound
 	}
-	if req.ToUserID != userID {
-		return ErrForbidden
-	}
-	if req.Status != "pending" {
-		return ErrNotPending
-	}
 
-	req.Status = "rejected"
-	req.UpdatedAt = time.Now().UnixMilli()
-	_, err = s.friendStore.Update(req)
-	return err
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	tx = nil
+	return nil
 }
 
 func (s *Service) CancelFriendRequest(requestID, fromUserID int64) error {
-	req, err := s.friendStore.GetByID(requestID)
+	tx, err := s.friendStore.DB().Begin()
 	if err != nil {
 		return err
 	}
-	if req == nil {
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
+
+	affected, err := s.friendStore.CancelTx(tx, requestID, fromUserID)
+	if err != nil {
+		return err
+	}
+	if !affected {
 		return ErrNotFound
 	}
-	if req.FromUserID != fromUserID {
-		return ErrForbidden
-	}
-	if req.Status != "pending" {
-		return ErrNotPending
-	}
 
-	_, err = s.friendStore.Delete(requestID)
-	return err
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	tx = nil
+	return nil
 }
 
 func (s *Service) DeleteFriendRequestsByUser(tx *sql.Tx, userID int64) error {

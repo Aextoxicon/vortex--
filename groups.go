@@ -24,7 +24,7 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 
 	var req CreateGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_input"})
+		handleError(c, ErrInvalidInput)
 		return
 	}
 
@@ -35,8 +35,8 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"group_id":       groupID,
-		"name":           req.Name,
+		"group_id":        groupID,
+		"name":            req.Name,
 		"owner_public_id": publicID,
 	})
 }
@@ -63,7 +63,7 @@ func (h *Handler) UpdateGroup(c *gin.Context) {
 
 	var req UpdateGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_input"})
+		handleError(c, ErrInvalidInput)
 		return
 	}
 
@@ -74,7 +74,7 @@ func (h *Handler) UpdateGroup(c *gin.Context) {
 	}
 
 	if group.OwnerID != userID {
-		c.JSON(http.StatusForbidden, ErrorResponse{Error: "Only group owner can update group"})
+		handleError(c, ErrForbidden)
 		return
 	}
 
@@ -104,7 +104,7 @@ func (h *Handler) DeleteGroup(c *gin.Context) {
 	}
 
 	if group.OwnerID != userID {
-		c.JSON(http.StatusForbidden, ErrorResponse{Error: "Only group owner can delete group"})
+		handleError(c, ErrForbidden)
 		return
 	}
 
@@ -171,10 +171,14 @@ func (s *Service) CreateGroup(name, description string, ownerID int64) (string, 
 	if err != nil {
 		return "", err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
 
 	now := time.Now().UnixMilli()
-	groupID := GenerateGroupID()
+	groupID := s.GenerateGroupID()
 
 	_, err = tx.Exec(`
 		INSERT INTO groups (group_id, name, description, owner_id, created_at, updated_at, is_deleted)
@@ -194,7 +198,11 @@ func (s *Service) CreateGroup(name, description string, ownerID int64) (string, 
 		return "", err
 	}
 
-	return groupID, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	tx = nil
+	return groupID, nil
 }
 
 func (s *Service) UpdateGroup(group *Group) error {
@@ -204,19 +212,32 @@ func (s *Service) UpdateGroup(group *Group) error {
 }
 
 func (s *Service) DeleteGroup(groupID string) error {
-	_, err := s.groupStore.Delete(groupID)
-	return err
-}
-
-func (s *Service) AddMember(groupID string, userID int64, role string) error {
-	isMember, err := s.groupMemStore.IsMember(groupID, userID)
+	tx, err := s.groupStore.DB().Begin()
 	if err != nil {
 		return err
 	}
-	if isMember {
-		return ErrConflict
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if _, err := s.groupMemStore.DeleteByGroupTx(tx, groupID); err != nil {
+		return err
 	}
 
+	if _, err := s.groupStore.Delete(groupID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	tx = nil
+	return nil
+}
+
+func (s *Service) AddMember(groupID string, userID int64, role string) error {
 	group, err := s.groupStore.GetByID(groupID)
 	if err != nil {
 		return err
@@ -232,9 +253,12 @@ func (s *Service) AddMember(groupID string, userID int64, role string) error {
 		JoinedAt: time.Now().UnixMilli(),
 	}
 
-	_, err = s.groupMemStore.Insert(member)
+	id, err := s.groupMemStore.Insert(member)
 	if err != nil {
 		return err
+	}
+	if id == 0 {
+		return ErrConflict
 	}
 
 	goSafe(func() {
@@ -274,30 +298,29 @@ func (s *Service) DeleteGroupMembersByUser(tx *sql.Tx, userID int64) error {
 	return err
 }
 
-func GenerateGroupID() string {
+func (s *Service) GenerateGroupID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	length := Cfg.GroupIDRandomLength
+	length := s.cfg.GroupIDRandomLength
 	if length <= 0 {
 		length = 8
 	}
-	randomLen := length
-	bytes := make([]byte, randomLen)
+	bytes := make([]byte, length)
 	if _, err := crand.Read(bytes); err != nil {
 		for i := range bytes {
 			bytes[i] = byte(i)
 		}
 	}
-	buf := make([]byte, 2+randomLen)
+	buf := make([]byte, 2+length)
 	buf[0], buf[1] = 'g', '_'
-	for i := 0; i < randomLen; i++ {
+	for i := 0; i < length; i++ {
 		buf[2+i] = chars[int(bytes[i])%len(chars)]
 	}
 	return string(buf)
 }
 
-func IsValidGroupID(groupID string) bool {
-	expectedLen := 2 + Cfg.GroupIDRandomLength
-	if Cfg.GroupIDRandomLength <= 0 {
+func (s *Service) IsValidGroupID(groupID string) bool {
+	expectedLen := 2 + s.cfg.GroupIDRandomLength
+	if s.cfg.GroupIDRandomLength <= 0 {
 		expectedLen = 10
 	}
 	return len(groupID) == expectedLen && groupID[:2] == "g_"
