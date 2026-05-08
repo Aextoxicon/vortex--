@@ -3,6 +3,9 @@ package main
 import (
 	crand "crypto/rand"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -25,6 +28,11 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 	var req CreateGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		handleError(c, ErrInvalidInput)
+		return
+	}
+
+	if !validateGroupName(req.Name) {
+		handleError(c, ErrInvalidGroupName)
 		return
 	}
 
@@ -138,6 +146,30 @@ func (h *Handler) LeaveGroup(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Successfully left group"})
+}
+
+func (h *Handler) KickMember(c *gin.Context) {
+	groupID := c.Param("id")
+	memberPublicID := c.Param("memberPublicId")
+	ownerID := c.GetInt64("user_id")
+
+	// 获取被踢用户的 UID
+	memberUser, err := h.svc.GetUserByPublicID(memberPublicID)
+	if err != nil {
+		handleError(c, ErrNotFound)
+		return
+	}
+	if memberUser == nil {
+		handleError(c, ErrNotFound)
+		return
+	}
+
+	if err := h.svc.KickMember(groupID, memberUser.ID, ownerID); err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Member kicked successfully"})
 }
 
 func (s *Service) GetGroupByID(groupID string) (*Group, error) {
@@ -289,8 +321,100 @@ func (s *Service) RemoveMember(groupID string, userID int64) error {
 	return err
 }
 
+func (s *Service) KickMember(groupID string, memberID, ownerID int64) error {
+	// 1. 检查群主身份
+	group, err := s.groupStore.GetByID(groupID)
+	if err != nil {
+		return err
+	}
+	if group == nil {
+		return ErrNotFound
+	}
+	if group.OwnerID != ownerID {
+		return ErrForbidden
+	}
+
+	// 2. 不能踢群主自己
+	if memberID == ownerID {
+		return ErrForbidden
+	}
+
+	// 3. 获取被踢用户的 publicId
+	kickedUser, err := s.userStore.GetByID(memberID)
+	if err != nil {
+		return err
+	}
+	if kickedUser == nil {
+		return ErrNotFound
+	}
+
+	// 4. 开启事务
+	tx, err := s.msgStore.DB().Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// 5. 在事务内再次检查成员身份（防止竞态条件）
+	isMember, err := s.groupMemStore.IsMember(groupID, memberID)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return ErrNotMember
+	}
+
+	// 6. 从群组移除成员
+	_, err = s.groupMemStore.DeleteByGroupAndUserTx(tx, groupID, memberID)
+	if err != nil {
+		return err
+	}
+
+	// 7. 发送系统消息
+	convID := "g_" + groupID
+	systemMsg := map[string]interface{}{
+		"type":    "system",
+		"content": "member_kicked",
+		"data": map[string]interface{}{
+			"kicked_public_id": kickedUser.PublicID,
+		},
+	}
+
+	contentBytes, err := json.Marshal(systemMsg)
+	if err != nil {
+		return fmt.Errorf("marshal system message failed: %w", err)
+	}
+
+	_, err = s.sendSystemMessageTx(tx, convID, contentBytes)
+	if err != nil {
+		return err
+	}
+
+	// 8. 提交事务
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// 9. 日志记录
+	slog.Info("KickMember",
+		"group_id", groupID,
+		"member_public_id", kickedUser.PublicID,
+		"owner_id", ownerID,
+	)
+
+	return nil
+}
+
 func (s *Service) IsUserInGroup(groupID string, userID int64) (bool, error) {
 	return s.groupMemStore.IsMember(groupID, userID)
+}
+
+func (s *Service) GetGroupMemberCount(groupID string) (int, error) {
+	return s.groupMemStore.CountByGroup(groupID)
 }
 
 func (s *Service) DeleteGroupMembersByUser(tx *sql.Tx, userID int64) error {
@@ -332,7 +456,7 @@ func IsGroupConv(convID string) bool {
 
 func ExtractGroupID(convID string) string {
 	if IsGroupConv(convID) {
-		return convID
+		return convID[2:] // 去掉 "g_" 前缀
 	}
 	return ""
 }

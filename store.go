@@ -67,9 +67,10 @@ type Message struct {
 }
 
 type ConversationParticipant struct {
-	ConvID string `db:"conv_id"`
-	UserID int64  `db:"user_id"`
-	JoinTs int64  `db:"join_ts"`
+	ConvID    string `db:"conv_id"`
+	UserID    int64  `db:"user_id"`
+	JoinTs    int64  `db:"join_ts"`
+	IsBlocked int    `db:"is_blocked"`
 }
 
 type IdGeneratorState struct {
@@ -715,6 +716,14 @@ func (s *GroupMemberStore) DeleteByGroupAndUser(groupID string, uid int64) (int6
 	return res.RowsAffected()
 }
 
+func (s *GroupMemberStore) DeleteByGroupAndUserTx(tx *sql.Tx, groupID string, uid int64) (int64, error) {
+	res, err := tx.Exec(`DELETE FROM group_members WHERE group_id = $1 AND uid = $2`, groupID, uid)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *GroupMemberStore) DeleteByUser(uid int64) (int64, error) {
 	res, err := s.db.Exec(`DELETE FROM group_members WHERE uid = $1`, uid)
 	if err != nil {
@@ -729,6 +738,17 @@ func (s *GroupMemberStore) DeleteByUserTx(tx *sql.Tx, uid int64) (int64, error) 
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+func (s *GroupMemberStore) CountByGroup(groupID string) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) 
+		FROM group_members 
+		WHERE group_id = $1`,
+		groupID,
+	).Scan(&count)
+	return count, err
 }
 
 func (s *GroupMemberStore) DeleteByGroupTx(tx *sql.Tx, groupID string) (int64, error) {
@@ -800,6 +820,22 @@ func (s *FriendRequestStore) GetPendingRequests(userID int64) ([]*FriendRequest,
 	}
 	defer rows.Close()
 	return scanFriendRequests(rows)
+}
+
+func (s *FriendRequestStore) AreFriends(userID1, userID2 int64) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM (
+			SELECT 1 FROM friend_requests
+			WHERE (from_user_id = $1 AND to_user_id = $2)
+			   OR (from_user_id = $2 AND to_user_id = $1)
+			AND status = 'accepted'
+			LIMIT 1
+		) t`, userID1, userID2).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (s *FriendRequestStore) HasPendingRequests(userID int64) (bool, error) {
@@ -955,6 +991,14 @@ func (s *ConversationParticipantStore) ExistsTx(tx *sql.Tx, convID string, userI
 	return exists, err
 }
 
+func (s *ConversationParticipantStore) DeleteByUserTx(tx *sql.Tx, userID int64) (int64, error) {
+	res, err := tx.Exec(`DELETE FROM conversation_participants WHERE user_id = $1`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *ConversationParticipantStore) InsertBatch(participants []*ConversationParticipant) (int64, error) {
 	if len(participants) == 0 {
 		return 0, nil
@@ -969,30 +1013,31 @@ func (s *ConversationParticipantStore) InsertBatch(participants []*ConversationP
 		}
 	}()
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO conversation_participants (conv_id, user_id, join_ts)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (conv_id, user_id) DO NOTHING`)
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO conversation_participants (conv_id, user_id, join_ts, is_blocked) VALUES `)
+
+	args := make([]interface{}, 0, len(participants)*4)
+	for i, p := range participants {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d)",
+			i*4+1, i*4+2, i*4+3, i*4+4))
+		args = append(args, p.ConvID, p.UserID, p.JoinTs, p.IsBlocked)
+	}
+	sb.WriteString(" ON CONFLICT (conv_id, user_id) DO NOTHING")
+
+	res, err := tx.Exec(sb.String(), args...)
 	if err != nil {
 		return 0, err
-	}
-	defer stmt.Close()
-
-	var count int64
-	for _, p := range participants {
-		res, err := stmt.Exec(p.ConvID, p.UserID, p.JoinTs)
-		if err != nil {
-			return 0, err
-		}
-		n, _ := res.RowsAffected()
-		count += n
 	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	tx = nil
-	return count, nil
+
+	return res.RowsAffected()
 }
 
 func (s *ConversationParticipantStore) InsertBatchTx(tx *sql.Tx, participants []*ConversationParticipant) (int64, error) {
@@ -1000,26 +1045,173 @@ func (s *ConversationParticipantStore) InsertBatchTx(tx *sql.Tx, participants []
 		return 0, nil
 	}
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO conversation_participants (conv_id, user_id, join_ts)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (conv_id, user_id) DO NOTHING`)
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO conversation_participants (conv_id, user_id, join_ts, is_blocked) VALUES `)
+
+	args := make([]interface{}, 0, len(participants)*4)
+	for i, p := range participants {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d)",
+			i*4+1, i*4+2, i*4+3, i*4+4))
+		args = append(args, p.ConvID, p.UserID, p.JoinTs, p.IsBlocked)
+	}
+	sb.WriteString(" ON CONFLICT (conv_id, user_id) DO NOTHING")
+
+	res, err := tx.Exec(sb.String(), args...)
 	if err != nil {
 		return 0, err
 	}
-	defer stmt.Close()
 
-	var count int64
-	for _, p := range participants {
-		res, err := stmt.Exec(p.ConvID, p.UserID, p.JoinTs)
-		if err != nil {
-			return 0, err
-		}
-		n, _ := res.RowsAffected()
-		count += n
+	return res.RowsAffected()
+}
+
+func (s *ConversationParticipantStore) SetBlocked(convID string, userID int64, blocked bool) error {
+	blockedInt := 0
+	if blocked {
+		blockedInt = 1
 	}
+	_, err := s.db.Exec(`
+		UPDATE conversation_participants 
+		SET is_blocked = $1 
+		WHERE conv_id = $2 AND user_id = $3`,
+		blockedInt, convID, userID,
+	)
+	return err
+}
 
-	return count, nil
+func (s *ConversationParticipantStore) IsBlocked(convID string, userID int64) (bool, error) {
+	var isBlocked int
+	err := s.db.QueryRow(`
+		SELECT is_blocked 
+		FROM conversation_participants 
+		WHERE conv_id = $1 AND user_id = $2`,
+		convID, userID,
+	).Scan(&isBlocked)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return isBlocked == 1, nil
+}
+
+func (s *ConversationParticipantStore) GetParticipants(convID string) ([]int64, error) {
+	rows, err := s.db.Query(`
+		SELECT user_id 
+		FROM conversation_participants 
+		WHERE conv_id = $1`,
+		convID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var participants []int64
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		participants = append(participants, userID)
+	}
+	return participants, rows.Err()
+}
+
+type ConversationListItem struct {
+	ConvID     string  `db:"conv_id"`
+	Type       string  `db:"type"`
+	TargetUID  *int64  `db:"target_uid"`
+	GroupID    *string `db:"group_id"`
+	LastMsgID  *int64  `db:"last_msg_id"`
+	FromUID    *int64  `db:"from_uid"`
+	Content    *string `db:"content"`
+	LastMsgTs  *int64  `db:"last_msg_ts"`
+	IsRecalled *int    `db:"is_recalled"`
+}
+
+func (s *ConversationParticipantStore) GetConversationList(userID int64, limit, offset int) ([]*ConversationListItem, error) {
+	query := `
+		WITH user_conversations AS (
+			SELECT cp.conv_id
+			FROM conversation_participants cp
+			WHERE cp.user_id = $1
+			  AND cp.is_blocked = 0
+		),
+		last_messages AS (
+			SELECT DISTINCT ON (m.conv_id)
+				m.conv_id,
+				m.msg_id,
+				m.from_uid,
+				m.content,
+				m.ts,
+				m.is_recalled
+			FROM messages m
+			WHERE m.conv_id IN (SELECT conv_id FROM user_conversations)
+			ORDER BY m.conv_id, m.ts DESC, m.msg_id DESC
+		)
+		SELECT 
+			uc.conv_id,
+			CASE 
+				WHEN uc.conv_id LIKE 'p_%' THEN 'private'
+				WHEN uc.conv_id LIKE 'g_%' THEN 'group'
+			END as type,
+			CASE 
+				WHEN uc.conv_id LIKE 'p_%' THEN (
+					SELECT p.user_id 
+					FROM conversation_participants p 
+					WHERE p.conv_id = uc.conv_id AND p.user_id != $1
+					LIMIT 1
+				)
+				ELSE NULL
+			END as target_uid,
+			CASE 
+				WHEN uc.conv_id LIKE 'g_%' THEN (
+					SELECT g.group_id 
+					FROM groups g 
+					WHERE g.group_id = SUBSTRING(uc.conv_id FROM 2)
+				)
+				ELSE NULL
+			END as group_id,
+			lm.msg_id as last_msg_id,
+			lm.from_uid,
+			lm.content,
+			lm.ts as last_msg_ts,
+			lm.is_recalled
+		FROM user_conversations uc
+		LEFT JOIN last_messages lm ON uc.conv_id = lm.conv_id
+		ORDER BY lm.last_msg_ts DESC NULLS LAST
+		LIMIT $2 OFFSET $3
+	`
+
+	rows, err := s.db.Query(query, userID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var conversations []*ConversationListItem
+	for rows.Next() {
+		var conv ConversationListItem
+		if err := rows.Scan(
+			&conv.ConvID,
+			&conv.Type,
+			&conv.TargetUID,
+			&conv.GroupID,
+			&conv.LastMsgID,
+			&conv.FromUID,
+			&conv.Content,
+			&conv.LastMsgTs,
+			&conv.IsRecalled,
+		); err != nil {
+			return nil, err
+		}
+		conversations = append(conversations, &conv)
+	}
+	return conversations, rows.Err()
 }
 
 // ==================== IdGeneratorStateStore ====================

@@ -12,8 +12,18 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
+
+func init() {
+	godotenv.Load()
+
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})
+	slog.SetDefault(slog.New(handler))
+}
 
 func main() {
 	cfg := LoadConfig()
@@ -62,12 +72,18 @@ func main() {
 	r := gin.Default()
 	setupRoutes(r, handler, jwtService, userStore, rateLimiter, cfg)
 
-	srv := &http.Server{Addr: cfg.Port, Handler: r}
+	srv := &http.Server{
+		Addr:         cfg.Port,
+		Handler:      r,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 
 	worker := NewWorker(cfg, svc, msgStore)
 	worker.Start()
 
-	quit := make(chan os.Signal, 1)
+	quit := make(chan os.Signal, 2)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
@@ -77,27 +93,58 @@ func main() {
 		}
 	}()
 
+	go func() {
+		<-quit
+		<-quit
+		slog.Warn("forced exit")
+		os.Exit(1)
+	}()
+
 	<-quit
 	slog.Info("shutting down...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	worker.Stop()
+	rateLimiter.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 	}
-
-	rateLimiter.Stop()
-	worker.Stop()
 }
 
 func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStore, rateLimiter *RateLimiter, cfg *Config) {
+	r.Use(func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+
+		if c.Request.URL.Path == "/health" || c.Request.URL.Path == "/ready" {
+			return
+		}
+
+		slog.Info("request",
+			"method", c.Request.Method,
+			"path", c.Request.URL.Path,
+			"status", c.Writer.Status(),
+			"latency_ms", time.Since(start).Milliseconds(),
+			"ip", c.ClientIP(),
+		)
+	})
+
+	r.Use(func(c *gin.Context) {
+		c.Set("rateLimiter", rateLimiter)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+		c.Next()
+	})
+
 	r.GET("/health", h.HealthCheck)
+	r.GET("/ready", h.ReadinessCheck)
 
 	api := r.Group("/api")
 	{
 		api.POST("/auth/register", h.Register)
-		api.POST("/auth/login", h.Login)
+		api.POST("/auth/login", loginRateLimitMiddleware(rateLimiter, 15*time.Minute, 5), h.Login)
 
 		auth := api.Group("")
 		auth.Use(jwtMiddleware(jwtService))
@@ -111,6 +158,9 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 			auth.GET("/messages", h.GetMessages)
 			auth.POST("/messages/recall/:msgId", h.RecallMessage)
 			auth.GET("/check", rateLimitMiddleware(rateLimiter, 3*time.Second), h.CheckNewMessages)
+			auth.GET("/conversations", h.GetConversations)
+			auth.POST("/blocks/:targetPublicId", h.BlockUser)
+			auth.DELETE("/blocks/:targetPublicId", h.UnblockUser)
 
 			auth.POST("/groups", h.CreateGroup)
 			auth.GET("/groups/:id", h.GetGroup)
@@ -118,6 +168,7 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 			auth.DELETE("/groups/:id", h.DeleteGroup)
 			auth.POST("/groups/:id/join", h.JoinGroup)
 			auth.POST("/groups/:id/leave", h.LeaveGroup)
+			auth.DELETE("/groups/:id/members/:memberPublicId", h.KickMember)
 
 			auth.POST("/friends/request/:targetPublicId", h.SendFriendRequest)
 			auth.GET("/friends/requests", h.GetFriendRequests)
@@ -178,6 +229,18 @@ func rateLimitMiddleware(rl *RateLimiter, interval time.Duration) gin.HandlerFun
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, ErrorResponse{Error: ErrRateLimitExceeded.Message})
 			return
 		}
+		c.Next()
+	}
+}
+
+func loginRateLimitMiddleware(rl *RateLimiter, interval time.Duration, maxFailures int) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		if !rl.AllowRequestWithMaxFailures(ip, interval, maxFailures) {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, ErrorResponse{Error: ErrRateLimitExceeded.Message})
+			return
+		}
+		c.Set("rate_limit_key", ip)
 		c.Next()
 	}
 }

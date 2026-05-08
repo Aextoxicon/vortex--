@@ -15,6 +15,7 @@ func RunMigrations(db *sql.DB) error {
 		createIdGeneratorStateTable,
 		createMessagesParentTable,
 		createJwtBlacklistTable,
+		addIsBlockedColumn,
 	}
 
 	for _, m := range migrations {
@@ -33,12 +34,12 @@ func createUsersTable(db *sql.DB) error {
 			id BIGSERIAL PRIMARY KEY,
 			username TEXT NOT NULL,
 			pwd_hash TEXT NOT NULL,
-			email TEXT,
+			email TEXT UNIQUE,
 			public_id TEXT NOT NULL UNIQUE,
 			created_at BIGINT NOT NULL,
 			updated_at BIGINT NOT NULL
 		);
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users (username) WHERE username IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 		CREATE INDEX IF NOT EXISTS idx_users_public_id ON users (public_id);
 	`)
 	return err
@@ -99,6 +100,7 @@ func createConversationParticipantsTable(db *sql.DB) error {
 			conv_id TEXT NOT NULL,
 			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			join_ts BIGINT NOT NULL,
+			is_blocked INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (conv_id, user_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_conversation_participants_user_id ON conversation_participants (user_id);
@@ -128,6 +130,13 @@ func createMessagesParentTable(db *sql.DB) error {
 			PRIMARY KEY (msg_id, ts)
 		) PARTITION BY RANGE (ts)
 	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_messages_conv_ts ON messages (conv_id, ts DESC, msg_id DESC)
+	`)
 	return err
 }
 
@@ -140,4 +149,8 @@ func createJwtBlacklistTable(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_jwt_blacklist_expires_at ON jwt_blacklist (expires_at);
 	`)
 	return err
+}
+
+func addIsBlockedColumn(db *sql.DB) error {
+	return nil
 }

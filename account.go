@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,10 +26,51 @@ type UpdateUserRequest struct {
 	Email    string `json:"email"`
 }
 
+var (
+	passwordRegex  = regexp.MustCompile(`^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\d\s]).{8,16}$`)
+	usernameRegex  = regexp.MustCompile(`^[\w\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]{3,20}$`)
+	emailRegex     = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	groupNameRegex = regexp.MustCompile(`^[\w\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\s_-]{1,50}$`)
+)
+
+func validatePassword(password string) bool {
+	return passwordRegex.MatchString(password)
+}
+
+func validateUsername(username string) bool {
+	return usernameRegex.MatchString(username)
+}
+
+func validateEmail(email string) bool {
+	if email == "" {
+		return true
+	}
+	return emailRegex.MatchString(email) && len(email) <= 100
+}
+
+func validateGroupName(name string) bool {
+	return groupNameRegex.MatchString(name)
+}
+
 func (h *Handler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		handleError(c, ErrInvalidInput)
+		return
+	}
+
+	if !validateUsername(req.Username) {
+		handleError(c, ErrInvalidUsername)
+		return
+	}
+
+	if !validateEmail(req.Email) {
+		handleError(c, ErrInvalidEmail)
+		return
+	}
+
+	if !validatePassword(req.Password) {
+		handleError(c, ErrWeakPassword)
 		return
 	}
 
@@ -67,14 +109,24 @@ func (h *Handler) Login(c *gin.Context) {
 
 	user, err := h.svc.GetUserByUsername(req.Username)
 	if err != nil {
+		rateLimiter := c.MustGet("rateLimiter").(*RateLimiter)
+		ip := c.ClientIP()
+		rateLimiter.RecordFailure(ip)
 		handleError(c, ErrInvalidCredentials)
 		return
 	}
 
 	if err := h.svc.ValidateCredentials(user, req.Password); err != nil {
+		rateLimiter := c.MustGet("rateLimiter").(*RateLimiter)
+		ip := c.ClientIP()
+		rateLimiter.RecordFailure(ip)
 		handleError(c, ErrInvalidCredentials)
 		return
 	}
+
+	rateLimiter := c.MustGet("rateLimiter").(*RateLimiter)
+	ip := c.ClientIP()
+	rateLimiter.ResetFailure(ip)
 
 	token, err := h.jwt.GenerateToken(user)
 	if err != nil {
@@ -117,6 +169,16 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	var req UpdateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		handleError(c, ErrInvalidInput)
+		return
+	}
+
+	if req.Username != "" && !validateUsername(req.Username) {
+		handleError(c, ErrInvalidUsername)
+		return
+	}
+
+	if req.Email != "" && !validateEmail(req.Email) {
+		handleError(c, ErrInvalidEmail)
 		return
 	}
 
@@ -213,6 +275,17 @@ func (s *Service) GetUserByPublicID(publicID string) (*User, error) {
 	return user, nil
 }
 
+func (s *Service) GetPublicIDByUserID(userID int64) (string, error) {
+	user, err := s.userStore.GetByID(userID)
+	if err != nil {
+		return "", err
+	}
+	if user == nil {
+		return "", ErrNotFound
+	}
+	return user.PublicID, nil
+}
+
 func (s *Service) CreateUser(username, password, email string) (int64, error) {
 	exists, err := s.userStore.UsernameExists(username)
 	if err != nil {
@@ -291,6 +364,14 @@ func (s *Service) DeleteUser(userID int64) error {
 			tx.Rollback()
 		}
 	}()
+
+	if _, err := s.groupMemStore.DeleteByUserTx(tx, userID); err != nil {
+		return err
+	}
+
+	if _, err := s.convPartStore.DeleteByUserTx(tx, userID); err != nil {
+		return err
+	}
 
 	if err := s.DeleteFriendRequestsByUser(tx, userID); err != nil {
 		return err

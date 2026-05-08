@@ -312,32 +312,62 @@ func (s *Service) DeleteFriendRequestsByUser(tx *sql.Tx, userID int64) error {
 	return err
 }
 
-func PrivateConvID(uid1, uid2 int64) string {
-	if uid1 < uid2 {
-		return fmt.Sprintf("p_%d_%d", uid1, uid2)
+func PrivateConvID(publicID1, publicID2 string) string {
+	if publicID1 < publicID2 {
+		return fmt.Sprintf("p_%s_%s", publicID1, publicID2)
 	}
-	return fmt.Sprintf("p_%d_%d", uid2, uid1)
+	return fmt.Sprintf("p_%s_%s", publicID2, publicID1)
 }
 
 func IsPrivateConv(convID string) bool {
 	return len(convID) > 0 && convID[0] == 'p'
 }
 
-func ParsePrivateConv(convID string) (int64, int64, error) {
+func ParsePrivateConv(convID string) (string, string, error) {
 	if !IsPrivateConv(convID) {
-		return 0, 0, errors.New("not a private conversation")
+		return "", "", errors.New("not a private conversation")
 	}
-	var a, b int64
-	if _, err := fmt.Sscanf(convID, "p_%d_%d", &a, &b); err != nil {
-		return 0, 0, err
+	var a, b string
+	if _, err := fmt.Sscanf(convID, "p_%s_%s", &a, &b); err != nil {
+		return "", "", err
 	}
 	return a, b, nil
 }
 
-func CanAccessPrivateConv(convID string, uid int64) bool {
+func CanAccessPrivateConv(convID string, publicID string) bool {
 	a, b, err := ParsePrivateConv(convID)
 	if err != nil {
 		return false
 	}
-	return a == uid || b == uid
+	return a == publicID || b == publicID
+}
+
+func ExtractConversationType(convID string) string {
+	if len(convID) == 0 {
+		return ""
+	}
+	if convID[0] == 'p' {
+		return "private"
+	}
+	if convID[0] == 'g' {
+		return "group"
+	}
+	return ""
+}
+
+func GetOtherPublicID(convID string, myPublicID string) string {
+	if !IsPrivateConv(convID) {
+		return ""
+	}
+	a, b, err := ParsePrivateConv(convID)
+	if err != nil {
+		return ""
+	}
+	if a == myPublicID {
+		return b
+	}
+	if b == myPublicID {
+		return a
+	}
+	return ""
 }

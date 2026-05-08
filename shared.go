@@ -2,6 +2,7 @@ package main
 
 import (
 	crand "crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -58,6 +59,21 @@ func NewHandler(svc *Service, jwt *JwtService, cfg *Config) *Handler {
 func (h *Handler) HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "ok",
+		"node_id":   h.cfg.NodeID,
+		"timestamp": time.Now().UnixMilli(),
+	})
+}
+
+func (h *Handler) ReadinessCheck(c *gin.Context) {
+	if err := h.svc.msgStore.DB().Ping(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "not ready",
+			"reason": "database unavailable",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":    "ready",
 		"node_id":   h.cfg.NodeID,
 		"timestamp": time.Now().UnixMilli(),
 	})
@@ -140,6 +156,31 @@ func (s *Service) SendNotificationToUser(uid int64, notifType string, data map[s
 	}
 
 	_, err = s.msgStore.InsertMessage(tableName, msg)
+	if err != nil {
+		return 0, err
+	}
+
+	return msgID, nil
+}
+
+func (s *Service) sendSystemMessageTx(tx *sql.Tx, convID string, content []byte) (int64, error) {
+	msgID, err := s.idGen.GenerateID()
+	if err != nil {
+		return 0, err
+	}
+
+	ts := time.Now().UnixMilli() - s.cfg.EpochTime
+	tableName := MessageTableNameByTs(ts)
+
+	msg := &Message{
+		MsgID:   msgID,
+		ConvID:  convID,
+		FromUID: 0,
+		Content: string(content),
+		Ts:      ts,
+	}
+
+	_, err = s.msgStore.InsertMessageTx(tx, tableName, msg)
 	if err != nil {
 		return 0, err
 	}

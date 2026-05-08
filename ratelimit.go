@@ -6,15 +6,17 @@ import (
 )
 
 type RateLimiter struct {
-	mu     sync.Mutex
-	cache  map[string]int64
-	stopCh chan struct{}
+	mu         sync.Mutex
+	cache      map[string]int64
+	failCounts map[string]int
+	stopCh     chan struct{}
 }
 
 func NewRateLimiter() *RateLimiter {
 	return &RateLimiter{
-		cache:  make(map[string]int64),
-		stopCh: make(chan struct{}),
+		cache:      make(map[string]int64),
+		failCounts: make(map[string]int),
+		stopCh:     make(chan struct{}),
 	}
 }
 
@@ -62,6 +64,41 @@ func (r *RateLimiter) CleanupExpired(ttl time.Duration) {
 	for id, last := range r.cache {
 		if now-last > ttl.Nanoseconds() {
 			delete(r.cache, id)
+			delete(r.failCounts, id)
 		}
 	}
+}
+
+func (r *RateLimiter) RecordFailure(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failCounts[key]++
+}
+
+func (r *RateLimiter) ResetFailure(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.failCounts, key)
+}
+
+func (r *RateLimiter) GetFailureCount(key string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.failCounts[key]
+}
+
+func (r *RateLimiter) AllowRequestWithMaxFailures(publicID string, interval time.Duration, maxFailures int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	failCount := r.failCounts[publicID]
+	if failCount >= maxFailures {
+		now := time.Now().UnixNano()
+		last, ok := r.cache[publicID]
+		if ok && now-last < interval.Nanoseconds() {
+			return false
+		}
+		r.failCounts[publicID] = 0
+	}
+	return true
 }
