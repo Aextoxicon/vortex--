@@ -25,7 +25,7 @@ jobs:
         run: |
           gofmt -l .
           if [ -n "$(gofmt -l .)" ]; then
-            echo "❌ Code is not formatted. Run 'gofmt -w .' to fix"
+            echo "Code is not formatted. Run 'gofmt -w .' to fix"
             exit 1
           fi
           echo "✅ Code is formatted"
@@ -35,10 +35,10 @@ jobs:
           go mod verify
           go mod tidy
           if [ -n "$(git status --porcelain go.mod go.sum)" ]; then
-            echo "❌ go.mod/go.sum not tidy. Run 'go mod tidy' to fix"
+            echo "go.mod/go.sum not tidy. Run 'go mod tidy' to fix"
             exit 1
           fi
-          echo "✅ Dependencies are tidy"
+          echo "Dependencies are tidy"
 
   # Job 2: Build
   build:
@@ -58,12 +58,12 @@ jobs:
         run: go mod download
 
       - name: Build
-        run: go build -v -o vortex ./...
+        run: go build -v ./...
         
       - name: Check for vulnerabilities
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./... || echo "⚠️ Vulnerabilities found (non-blocking)"
+          govulncheck ./... || echo "Vulnerabilities found (non-blocking)"
 
   # Job 3: Unit Tests (no Docker required)
   unit-test:

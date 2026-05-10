@@ -19,7 +19,7 @@ test-all: test-unit test-integration
 
 # 构建
 build:
-	go build -v -o vortex ./...
+	go build -v ./...
 
 # 格式化代码
 fmt:
