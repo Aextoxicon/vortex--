@@ -13,6 +13,7 @@ func RunMigrations(db *sql.DB) error {
 		createFriendRequestsTable,
 		createConversationParticipantsTable,
 		createIdGeneratorStateTable,
+		createMessageIdempotencyTable,
 		createMessagesParentTable,
 		createJwtBlacklistTable,
 		addIsBlockedColumn,
@@ -114,6 +115,23 @@ func createIdGeneratorStateTable(db *sql.DB) error {
 			id BIGSERIAL PRIMARY KEY,
 			last_ts BIGINT NOT NULL
 		)
+	`)
+	return err
+}
+
+func createMessageIdempotencyTable(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS message_idempotency (
+			id BIGSERIAL PRIMARY KEY,
+			user_id BIGINT NOT NULL,
+			client_msg_id TEXT NOT NULL,
+			msg_id BIGINT NOT NULL DEFAULT 0,
+			conv_id TEXT NOT NULL DEFAULT '',
+			created_at BIGINT NOT NULL,
+			UNIQUE (user_id, client_msg_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_message_idempotency_user_id ON message_idempotency (user_id);
+		CREATE INDEX IF NOT EXISTS idx_message_idempotency_created_at ON message_idempotency (created_at);
 	`)
 	return err
 }

@@ -1,23 +1,41 @@
 package main
 
 import (
+	"hash/fnv"
 	"sync"
 	"time"
 )
 
-type RateLimiter struct {
+const rateLimiterShards = 16
+
+type rateLimiterShard struct {
 	mu         sync.Mutex
 	cache      map[string]int64
 	failCounts map[string]int
-	stopCh     chan struct{}
+}
+
+type RateLimiter struct {
+	shards [rateLimiterShards]*rateLimiterShard
+	stopCh chan struct{}
 }
 
 func NewRateLimiter() *RateLimiter {
-	return &RateLimiter{
-		cache:      make(map[string]int64),
-		failCounts: make(map[string]int),
-		stopCh:     make(chan struct{}),
+	rl := &RateLimiter{
+		stopCh: make(chan struct{}),
 	}
+	for i := 0; i < rateLimiterShards; i++ {
+		rl.shards[i] = &rateLimiterShard{
+			cache:      make(map[string]int64),
+			failCounts: make(map[string]int),
+		}
+	}
+	return rl
+}
+
+func (r *RateLimiter) getShard(key string) *rateLimiterShard {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return r.shards[h.Sum32()%rateLimiterShards]
 }
 
 func (r *RateLimiter) StartCleanup(interval, ttl time.Duration) {
@@ -44,61 +62,69 @@ func (r *RateLimiter) AllowRequest(publicID string) bool {
 }
 
 func (r *RateLimiter) AllowRequestWithInterval(publicID string, interval time.Duration) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	shard := r.getShard(publicID)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
 	now := time.Now().UnixNano()
-	last, ok := r.cache[publicID]
+	last, ok := shard.cache[publicID]
 	if ok && now-last < interval.Nanoseconds() {
 		return false
 	}
-	r.cache[publicID] = now
+	shard.cache[publicID] = now
 	return true
 }
 
 func (r *RateLimiter) CleanupExpired(ttl time.Duration) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	now := time.Now().UnixNano()
-	for id, last := range r.cache {
-		if now-last > ttl.Nanoseconds() {
-			delete(r.cache, id)
-			delete(r.failCounts, id)
+	ttlNs := ttl.Nanoseconds()
+
+	for _, shard := range r.shards {
+		shard.mu.Lock()
+		for id, last := range shard.cache {
+			if now-last > ttlNs {
+				delete(shard.cache, id)
+				delete(shard.failCounts, id)
+			}
 		}
+		shard.mu.Unlock()
 	}
 }
 
 func (r *RateLimiter) RecordFailure(key string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.failCounts[key]++
+	shard := r.getShard(key)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	shard.failCounts[key]++
 }
 
 func (r *RateLimiter) ResetFailure(key string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.failCounts, key)
+	shard := r.getShard(key)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	delete(shard.failCounts, key)
 }
 
 func (r *RateLimiter) GetFailureCount(key string) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.failCounts[key]
+	shard := r.getShard(key)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	return shard.failCounts[key]
 }
 
 func (r *RateLimiter) AllowRequestWithMaxFailures(publicID string, interval time.Duration, maxFailures int) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	shard := r.getShard(publicID)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
-	failCount := r.failCounts[publicID]
+	failCount := shard.failCounts[publicID]
 	if failCount >= maxFailures {
 		now := time.Now().UnixNano()
-		last, ok := r.cache[publicID]
+		last, ok := shard.cache[publicID]
 		if ok && now-last < interval.Nanoseconds() {
 			return false
 		}
-		r.failCounts[publicID] = 0
+		shard.failCounts[publicID] = 0
 	}
 	return true
 }

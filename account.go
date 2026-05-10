@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -27,14 +28,35 @@ type UpdateUserRequest struct {
 }
 
 var (
-	passwordRegex  = regexp.MustCompile(`^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\d\s]).{8,16}$`)
-	usernameRegex  = regexp.MustCompile(`^[\w\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]{3,20}$`)
+	usernameRegex  = regexp.MustCompile(`^[a-zA-Z0-9_\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]{3,20}$`)
 	emailRegex     = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
-	groupNameRegex = regexp.MustCompile(`^[\w\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\s_-]{1,50}$`)
+	groupNameRegex = regexp.MustCompile(`^[\w\s\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}_-]{1,50}$`)
 )
 
 func validatePassword(password string) bool {
-	return passwordRegex.MatchString(password)
+	if len(password) < 8 || len(password) > 16 {
+		return false
+	}
+
+	hasLower := false
+	hasUpper := false
+	hasDigit := false
+	hasSpecial := false
+
+	for _, r := range password {
+		switch {
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r == '!' || r == '@' || r == '#' || r == '$' || r == '%' || r == '^' || r == '&' || r == '*' || r == '(' || r == ')':
+			hasSpecial = true
+		}
+	}
+
+	return hasLower && hasUpper && hasDigit && hasSpecial
 }
 
 func validateUsername(username string) bool {
@@ -74,13 +96,13 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	userID, err := h.svc.CreateUser(req.Username, req.Password, req.Email)
+	userID, err := h.svc.CreateUser(c.Request.Context(), req.Username, req.Password, req.Email)
 	if err != nil {
 		handleError(c, err)
 		return
 	}
 
-	user, err := h.svc.GetUserByID(userID)
+	user, err := h.svc.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -107,7 +129,7 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	user, err := h.svc.GetUserByUsername(req.Username)
+	user, err := h.svc.GetUserByUsername(c.Request.Context(), req.Username)
 	if err != nil {
 		rateLimiter := c.MustGet("rateLimiter").(*RateLimiter)
 		ip := c.ClientIP()
@@ -143,7 +165,7 @@ func (h *Handler) Login(c *gin.Context) {
 
 func (h *Handler) GetMe(c *gin.Context) {
 	userID := c.GetInt64("user_id")
-	user, err := h.svc.GetUserByID(userID)
+	user, err := h.svc.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -182,7 +204,7 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.svc.GetUserByPublicID(publicID)
+	user, err := h.svc.GetUserByPublicID(c.Request.Context(), publicID)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -195,7 +217,7 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		user.Email = req.Email
 	}
 
-	if err := h.svc.UpdateUser(user); err != nil {
+	if err := h.svc.UpdateUser(c.Request.Context(), user); err != nil {
 		handleError(c, err)
 		return
 	}
@@ -215,13 +237,13 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.svc.GetUserByPublicID(publicID)
+	user, err := h.svc.GetUserByPublicID(c.Request.Context(), publicID)
 	if err != nil {
 		handleError(c, err)
 		return
 	}
 
-	if err := h.svc.DeleteUser(user.ID); err != nil {
+	if err := h.svc.DeleteUser(c.Request.Context(), user.ID); err != nil {
 		handleError(c, err)
 		return
 	}
@@ -242,8 +264,8 @@ func (h *Handler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Logged out successfully"})
 }
 
-func (s *Service) GetUserByID(userID int64) (*User, error) {
-	user, err := s.userStore.GetByID(userID)
+func (s *Service) GetUserByID(ctx context.Context, userID int64) (*User, error) {
+	user, err := s.userStore.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -253,8 +275,8 @@ func (s *Service) GetUserByID(userID int64) (*User, error) {
 	return user, nil
 }
 
-func (s *Service) GetUserByUsername(username string) (*User, error) {
-	user, err := s.userStore.GetByUsername(username)
+func (s *Service) GetUserByUsername(ctx context.Context, username string) (*User, error) {
+	user, err := s.userStore.GetByUsername(ctx, username)
 	if err != nil {
 		return nil, err
 	}
@@ -264,8 +286,8 @@ func (s *Service) GetUserByUsername(username string) (*User, error) {
 	return user, nil
 }
 
-func (s *Service) GetUserByPublicID(publicID string) (*User, error) {
-	user, err := s.userStore.GetByPublicID(publicID)
+func (s *Service) GetUserByPublicID(ctx context.Context, publicID string) (*User, error) {
+	user, err := s.userStore.GetByPublicID(ctx, publicID)
 	if err != nil {
 		return nil, err
 	}
@@ -275,8 +297,8 @@ func (s *Service) GetUserByPublicID(publicID string) (*User, error) {
 	return user, nil
 }
 
-func (s *Service) GetPublicIDByUserID(userID int64) (string, error) {
-	user, err := s.userStore.GetByID(userID)
+func (s *Service) GetPublicIDByUserID(ctx context.Context, userID int64) (string, error) {
+	user, err := s.GetUserByID(ctx, userID)
 	if err != nil {
 		return "", err
 	}
@@ -286,8 +308,8 @@ func (s *Service) GetPublicIDByUserID(userID int64) (string, error) {
 	return user.PublicID, nil
 }
 
-func (s *Service) CreateUser(username, password, email string) (int64, error) {
-	exists, err := s.userStore.UsernameExists(username)
+func (s *Service) CreateUser(ctx context.Context, username, password, email string) (int64, error) {
+	exists, err := s.userStore.UsernameExists(ctx, username)
 	if err != nil {
 		return 0, err
 	}
@@ -296,7 +318,7 @@ func (s *Service) CreateUser(username, password, email string) (int64, error) {
 	}
 
 	if email != "" {
-		emailExists, err := s.userStore.EmailExists(email)
+		emailExists, err := s.userStore.EmailExists(ctx, email)
 		if err != nil {
 			return 0, err
 		}
@@ -322,7 +344,7 @@ func (s *Service) CreateUser(username, password, email string) (int64, error) {
 		UpdatedAt: now,
 	}
 
-	result, err := s.userStore.Insert(user)
+	result, err := s.userStore.Insert(ctx, user)
 	if err != nil {
 		return 0, err
 	}
@@ -330,14 +352,14 @@ func (s *Service) CreateUser(username, password, email string) (int64, error) {
 	return result, nil
 }
 
-func (s *Service) UpdateUser(user *User) error {
+func (s *Service) UpdateUser(ctx context.Context, user *User) error {
 	user.UpdatedAt = time.Now().UnixMilli()
-	_, err := s.userStore.Update(user)
+	_, err := s.userStore.Update(ctx, user)
 	return err
 }
 
-func (s *Service) DeleteUser(userID int64) error {
-	user, err := s.GetUserByID(userID)
+func (s *Service) DeleteUser(ctx context.Context, userID int64) error {
+	user, err := s.GetUserByID(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -345,12 +367,12 @@ func (s *Service) DeleteUser(userID int64) error {
 		return ErrNotFound
 	}
 
-	groups, err := s.groupStore.GetGroupsByOwner(userID)
+	groups, err := s.groupStore.GetGroupsByOwner(ctx, userID)
 	if err != nil {
 		return err
 	}
 	for _, g := range groups {
-		if err := s.DeleteGroup(g.GroupID); err != nil {
+		if err := s.DeleteGroup(ctx, g.GroupID); err != nil {
 			return fmt.Errorf("failed to delete group %s: %w", g.GroupID, err)
 		}
 	}
@@ -373,7 +395,7 @@ func (s *Service) DeleteUser(userID int64) error {
 		return err
 	}
 
-	if err := s.DeleteFriendRequestsByUser(tx, userID); err != nil {
+	if err := s.DeleteFriendRequestsByUser(ctx, tx, userID); err != nil {
 		return err
 	}
 	if _, err := s.userStore.DeleteTx(tx, userID); err != nil {

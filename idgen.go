@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -75,7 +76,7 @@ func (g *IdGenerator) WaitInit() {
 }
 
 func (g *IdGenerator) initFromDB() error {
-	state, err := g.idGenSt.GetFirst()
+	state, err := g.idGenSt.GetFirst(context.Background())
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
@@ -188,7 +189,11 @@ func (g *IdGenerator) fetchNewSegmentLocked() error {
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
 
 	state, err := g.idGenSt.GetFirstForUpdate(tx)
 	if err != nil {
@@ -230,6 +235,7 @@ func (g *IdGenerator) fetchNewSegmentLocked() error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
+	tx = nil
 
 	g.segments = append(g.segments, seg)
 

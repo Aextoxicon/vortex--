@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ type SendMessageRequest struct {
 	Content     string `json:"content" binding:"required,max=1000"`
 	Text        string `json:"text" binding:"max=1000"`
 	ContentType string `json:"content_type"`
+	ClientMsgID string `json:"client_msg_id"`
 }
 
 type SendMessageResult struct {
@@ -25,6 +27,7 @@ type SendMessageResult struct {
 	Content    string `json:"content"`
 	Ts         int64  `json:"ts"`
 	IsRecalled int    `json:"is_recalled"`
+	Duplicate  bool   `json:"duplicate,omitempty"`
 }
 
 func (h *Handler) SendMessage(c *gin.Context) {
@@ -49,7 +52,7 @@ func (h *Handler) SendMessage(c *gin.Context) {
 	}
 
 	user := &User{ID: userID, PublicID: publicID}
-	result, err := h.svc.SendMessage(user, req.ConvID, content)
+	result, err := h.svc.SendMessage(c.Request.Context(), user, req.ConvID, content, req.ClientMsgID)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -114,7 +117,7 @@ func (h *Handler) GetMessages(c *gin.Context) {
 		date = time.Now()
 	}
 
-	messages, err := h.svc.GetConversationMessages(convID, date, days, pageSize, lastMsgId, userID)
+	messages, err := h.svc.GetConversationMessages(c.Request.Context(), convID, date, days, pageSize, lastMsgId, userID)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -138,7 +141,7 @@ func (h *Handler) RecallMessage(c *gin.Context) {
 
 	msgTimestamp := h.svc.idGen.ExtractTimestampFromMsgID(msgID)
 
-	if err := h.svc.RecallMessage(msgID, msgTimestamp, userID); err != nil {
+	if err := h.svc.RecallMessage(c.Request.Context(), msgID, msgTimestamp, userID); err != nil {
 		handleError(c, err)
 		return
 	}
@@ -159,7 +162,7 @@ func (h *Handler) CheckNewMessages(c *gin.Context) {
 		}
 	}
 
-	result, err := h.svc.CheckNewMessages(userID, lastMsgID)
+	result, err := h.svc.CheckNewMessages(c.Request.Context(), userID, lastMsgID)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -168,8 +171,29 @@ func (h *Handler) CheckNewMessages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": result})
 }
 
-func (s *Service) SendMessage(currentUser *User, convID, content string) (*SendMessageResult, error) {
+func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, content, clientMsgID string) (*SendMessageResult, error) {
 	uid := currentUser.ID
+
+	if clientMsgID != "" {
+		isDup, existingMsgID, err := s.idempotencyStore.CheckAndInsert(ctx, uid, clientMsgID)
+		if err != nil {
+			return nil, err
+		}
+		if isDup {
+			return &SendMessageResult{
+				MsgID:     fmt.Sprintf("%d", existingMsgID),
+				ConvID:    convID,
+				FromUID:   uid,
+				Content:   content,
+				Duplicate: true,
+			}, nil
+		}
+		defer func() {
+			if clientMsgID != "" {
+				s.idempotencyStore.UpdateMsgID(ctx, uid, clientMsgID, 0, convID)
+			}
+		}()
+	}
 
 	msgType := ExtractConversationType(convID)
 
@@ -191,7 +215,7 @@ func (s *Service) SendMessage(currentUser *User, convID, content string) (*SendM
 
 	var targetUser *User
 	if msgType == "p" || msgType == "user" {
-		targetPublicID, err := s.GetPublicIDByUserID(uid)
+		targetPublicID, err := s.GetPublicIDByUserID(ctx, uid)
 		if err != nil {
 			return nil, err
 		}
@@ -199,7 +223,7 @@ func (s *Service) SendMessage(currentUser *User, convID, content string) (*SendM
 		if otherPublicID == "" {
 			return nil, ErrInvalidTargetID
 		}
-		targetUser, err = s.GetUserByPublicID(otherPublicID)
+		targetUser, err = s.GetUserByPublicID(ctx, otherPublicID)
 		if err != nil {
 			return nil, err
 		}
@@ -208,7 +232,7 @@ func (s *Service) SendMessage(currentUser *User, convID, content string) (*SendM
 		}
 	}
 
-	tx, err := s.msgStore.DB().Begin()
+	tx, err := s.msgStore.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -218,13 +242,19 @@ func (s *Service) SendMessage(currentUser *User, convID, content string) (*SendM
 		}
 	}()
 
-	if err := s.ensureSessionPermissionTx(tx, uid, convID, msgType, targetUser); err != nil {
+	if err := s.ensureSessionPermissionTx(ctx, tx, uid, convID, msgType, targetUser); err != nil {
 		return nil, err
 	}
 
 	_, err = s.msgStore.InsertMessageTx(tx, tableName, msg)
 	if err != nil {
 		return nil, err
+	}
+
+	if clientMsgID != "" {
+		if err := s.idempotencyStore.UpdateMsgIDTx(ctx, tx, uid, clientMsgID, msgID, convID); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -243,9 +273,9 @@ func (s *Service) SendMessage(currentUser *User, convID, content string) (*SendM
 	return result, nil
 }
 
-func (s *Service) GetMessage(msgID, msgTimestamp int64) (*Message, error) {
+func (s *Service) GetMessage(ctx context.Context, msgID, msgTimestamp int64) (*Message, error) {
 	tableName := MessageTableNameByTs(msgTimestamp)
-	msg, err := s.msgStore.GetMessage(tableName, msgID)
+	msg, err := s.msgStore.GetMessage(ctx, tableName, msgID)
 	if err != nil {
 		return nil, err
 	}
@@ -255,15 +285,15 @@ func (s *Service) GetMessage(msgID, msgTimestamp int64) (*Message, error) {
 	return msg, nil
 }
 
-func (s *Service) GetConversationMessages(convID string, endDate time.Time, days, pageSize int, lastMsgId int64, userID int64) (*MessagePage, error) {
-	hasPerm, err := s.convPartStore.Exists(convID, userID)
+func (s *Service) GetConversationMessages(ctx context.Context, convID string, endDate time.Time, days, pageSize int, lastMsgId int64, userID int64) (*MessagePage, error) {
+	hasPerm, err := s.convPartStore.Exists(ctx, convID, userID)
 	if err != nil {
 		return nil, err
 	}
 
 	if !hasPerm {
 		if groupID := ExtractGroupID(convID); groupID != "" {
-			isMember, err := s.IsUserInGroup(groupID, userID)
+			isMember, err := s.IsUserInGroup(ctx, groupID, userID)
 			if err != nil {
 				return nil, err
 			}
@@ -275,15 +305,14 @@ func (s *Service) GetConversationMessages(convID string, endDate time.Time, days
 		}
 	}
 
-	// 检查是否被对方拉黑（仅私聊）
 	if IsPrivateConv(convID) {
-		participants, err := s.convPartStore.GetParticipants(convID)
+		participants, err := s.convPartStore.GetParticipants(ctx, convID)
 		if err != nil {
 			return nil, err
 		}
 		for _, participantID := range participants {
 			if participantID != userID {
-				isBlocked, err := s.convPartStore.IsBlocked(convID, participantID)
+				isBlocked, err := s.convPartStore.IsBlocked(ctx, convID, participantID)
 				if err != nil {
 					return nil, err
 				}
@@ -299,16 +328,16 @@ func (s *Service) GetConversationMessages(convID string, endDate time.Time, days
 	startTs := startDate.UnixMilli() - s.cfg.EpochTime
 	endTs := endDate.AddDate(0, 0, 1).UnixMilli() - s.cfg.EpochTime
 
-	return s.msgStore.GetConversationMessagesByRange(convID, startTs, endTs, pageSize, lastMsgId)
+	return s.msgStore.GetConversationMessagesByRange(ctx, convID, startTs, endTs, pageSize, lastMsgId)
 }
 
-func (s *Service) CheckNewMessages(userID, lastMsgID int64) (int, error) {
-	hasNewMessages, err := s.msgStore.HasNewMessagesAfter(userID, lastMsgID)
+func (s *Service) CheckNewMessages(ctx context.Context, userID, lastMsgID int64) (int, error) {
+	hasNewMessages, err := s.msgStore.HasNewMessagesAfter(ctx, userID, lastMsgID)
 	if err != nil {
 		return 0, err
 	}
 
-	hasPendingRequests, err := s.friendStore.HasPendingRequests(userID)
+	hasPendingRequests, err := s.friendStore.HasPendingRequests(ctx, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -324,7 +353,7 @@ func (s *Service) CheckNewMessages(userID, lastMsgID int64) (int, error) {
 	return status, nil
 }
 
-func (s *Service) RecallMessage(msgID, msgTimestamp, userID int64) error {
+func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID int64) error {
 	now := time.Now().UnixMilli()
 	msgAge := now - msgTimestamp
 	if msgAge > s.cfg.MessageRecallWindowMs {
@@ -332,7 +361,7 @@ func (s *Service) RecallMessage(msgID, msgTimestamp, userID int64) error {
 	}
 
 	tableName := MessageTableNameByTs(msgTimestamp)
-	msg, err := s.msgStore.GetMessage(tableName, msgID)
+	msg, err := s.msgStore.GetMessage(ctx, tableName, msgID)
 	if err != nil {
 		return err
 	}
@@ -348,21 +377,21 @@ func (s *Service) RecallMessage(msgID, msgTimestamp, userID int64) error {
 
 	msg.IsRecalled = 1
 	msg.Content = ""
-	_, err = s.msgStore.UpdateMessage(tableName, msg)
+	_, err = s.msgStore.UpdateMessage(ctx, tableName, msg)
 	return err
 }
 
-func (s *Service) generateConversationID(msgType string, uid int64, targetPublicID string) (string, error) {
+func (s *Service) generateConversationID(ctx context.Context, msgType string, uid int64, targetPublicID string) (string, error) {
 	switch msgType {
 	case "p", "user":
-		targetUser, err := s.GetUserByPublicID(targetPublicID)
+		targetUser, err := s.GetUserByPublicID(ctx, targetPublicID)
 		if err != nil {
 			return "", err
 		}
 		if targetUser == nil {
 			return "", ErrInvalidTargetID
 		}
-		myPublicID, err := s.GetPublicIDByUserID(uid)
+		myPublicID, err := s.GetPublicIDByUserID(ctx, uid)
 		if err != nil {
 			return "", err
 		}
@@ -377,10 +406,10 @@ func (s *Service) generateConversationID(msgType string, uid int64, targetPublic
 	}
 }
 
-func (s *Service) ensureSessionPermissionTx(tx *sql.Tx, uid int64, convID, msgType string, targetUser *User) error {
+func (s *Service) ensureSessionPermissionTx(ctx context.Context, tx *sql.Tx, uid int64, convID, msgType string, targetUser *User) error {
 	switch msgType {
 	case "p", "user":
-		myPublicID, err := s.GetPublicIDByUserID(uid)
+		myPublicID, err := s.GetPublicIDByUserID(ctx, uid)
 		if err != nil {
 			return err
 		}
@@ -388,8 +417,7 @@ func (s *Service) ensureSessionPermissionTx(tx *sql.Tx, uid int64, convID, msgTy
 			return ErrForbidden
 		}
 
-		// 检查是否被对方拉黑
-		isBlocked, err := s.convPartStore.IsBlocked(convID, targetUser.ID)
+		isBlocked, err := s.convPartStore.IsBlocked(ctx, convID, targetUser.ID)
 		if err != nil {
 			return err
 		}
@@ -397,8 +425,7 @@ func (s *Service) ensureSessionPermissionTx(tx *sql.Tx, uid int64, convID, msgTy
 			return ErrForbidden
 		}
 
-		// 检查是否是好友（必须好友请求同意后才能私聊）
-		areFriends, err := s.friendStore.AreFriends(uid, targetUser.ID)
+		areFriends, err := s.friendStore.AreFriends(ctx, uid, targetUser.ID)
 		if err != nil {
 			return err
 		}
@@ -431,7 +458,7 @@ func (s *Service) ensureSessionPermissionTx(tx *sql.Tx, uid int64, convID, msgTy
 		if groupID == "" {
 			return ErrInvalidType
 		}
-		isMember, err := s.IsUserInGroup(groupID, uid)
+		isMember, err := s.IsUserInGroup(ctx, groupID, uid)
 		if err != nil {
 			return err
 		}
@@ -453,7 +480,7 @@ type ImageContent struct {
 func (h *Handler) BlockUser(c *gin.Context) {
 	targetPublicID := c.Param("targetPublicId")
 
-	targetUser, err := h.svc.GetUserByPublicID(targetPublicID)
+	targetUser, err := h.svc.GetUserByPublicID(c.Request.Context(), targetPublicID)
 	if err != nil {
 		handleError(c, ErrNotFound)
 		return
@@ -461,7 +488,7 @@ func (h *Handler) BlockUser(c *gin.Context) {
 
 	convID := PrivateConvID(c.GetString("public_id"), targetPublicID)
 
-	if err := h.svc.BlockUser(convID, targetUser.ID); err != nil {
+	if err := h.svc.BlockUser(c.Request.Context(), convID, targetUser.ID); err != nil {
 		handleError(c, err)
 		return
 	}
@@ -472,7 +499,7 @@ func (h *Handler) BlockUser(c *gin.Context) {
 func (h *Handler) UnblockUser(c *gin.Context) {
 	targetPublicID := c.Param("targetPublicId")
 
-	targetUser, err := h.svc.GetUserByPublicID(targetPublicID)
+	targetUser, err := h.svc.GetUserByPublicID(c.Request.Context(), targetPublicID)
 	if err != nil {
 		handleError(c, ErrNotFound)
 		return
@@ -480,7 +507,7 @@ func (h *Handler) UnblockUser(c *gin.Context) {
 
 	convID := PrivateConvID(c.GetString("public_id"), targetPublicID)
 
-	if err := h.svc.UnblockUser(convID, targetUser.ID); err != nil {
+	if err := h.svc.UnblockUser(c.Request.Context(), convID, targetUser.ID); err != nil {
 		handleError(c, err)
 		return
 	}
@@ -506,7 +533,7 @@ func (h *Handler) GetConversations(c *gin.Context) {
 		return
 	}
 
-	result, err := h.svc.GetConversationList(userID, limit, offset)
+	result, err := h.svc.GetConversationList(c.Request.Context(), userID, limit, offset)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -515,12 +542,12 @@ func (h *Handler) GetConversations(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-func (s *Service) BlockUser(convID string, targetUserID int64) error {
-	return s.convPartStore.SetBlocked(convID, targetUserID, true)
+func (s *Service) BlockUser(ctx context.Context, convID string, targetUserID int64) error {
+	return s.convPartStore.SetBlocked(ctx, convID, targetUserID, true)
 }
 
-func (s *Service) UnblockUser(convID string, targetUserID int64) error {
-	return s.convPartStore.SetBlocked(convID, targetUserID, false)
+func (s *Service) UnblockUser(ctx context.Context, convID string, targetUserID int64) error {
+	return s.convPartStore.SetBlocked(ctx, convID, targetUserID, false)
 }
 
 type ConversationListResponse struct {
@@ -556,8 +583,8 @@ type LastMessageInfo struct {
 	IsRecalled bool   `json:"is_recalled"`
 }
 
-func (s *Service) GetConversationList(userID int64, limit, offset int) (*ConversationListResponse, error) {
-	items, err := s.convPartStore.GetConversationList(userID, limit, offset)
+func (s *Service) GetConversationList(ctx context.Context, userID int64, limit, offset int) (*ConversationListResponse, error) {
+	items, err := s.convPartStore.GetConversationList(ctx, userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +597,7 @@ func (s *Service) GetConversationList(userID int64, limit, offset int) (*Convers
 		}
 
 		if item.Type == "private" && item.TargetUID != nil {
-			targetUser, err := s.GetUserByID(*item.TargetUID)
+			targetUser, err := s.GetUserByID(ctx, *item.TargetUID)
 			if err != nil {
 				return nil, err
 			}
@@ -582,12 +609,12 @@ func (s *Service) GetConversationList(userID int64, limit, offset int) (*Convers
 				}
 			}
 		} else if item.Type == "group" && item.GroupID != nil {
-			group, err := s.GetGroupByID(*item.GroupID)
+			group, err := s.GetGroupByID(ctx, *item.GroupID)
 			if err != nil {
 				return nil, err
 			}
 			if group != nil {
-				memberCount, err := s.GetGroupMemberCount(*item.GroupID)
+				memberCount, err := s.GetGroupMemberCount(ctx, *item.GroupID)
 				if err != nil {
 					return nil, err
 				}

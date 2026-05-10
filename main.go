@@ -16,6 +16,13 @@ import (
 	_ "github.com/lib/pq"
 )
 
+const (
+	RequestTimeout     = 30 * time.Second
+	MaxRequestBodySize = 1 << 20
+	MaxMessageDays     = 7
+	MaxConversations   = 100
+)
+
 func init() {
 	godotenv.Load()
 
@@ -51,6 +58,7 @@ func main() {
 	friendStore := &FriendRequestStore{Store: store}
 	convPartStore := &ConversationParticipantStore{Store: store}
 	idGenStateStore := &IdGeneratorStateStore{Store: store}
+	idempotencyStore := &MessageIdempotencyStore{Store: store}
 
 	idGen := NewIdGenerator(cfg, idGenStateStore, msgStore, cfg.NodeID)
 	idGen.Init()
@@ -59,7 +67,7 @@ func main() {
 		cfg,
 		userStore, msgStore, groupStore, groupMemStore,
 		friendStore, convPartStore,
-		idGenStateStore, idGen,
+		idGenStateStore, idempotencyStore, idGen,
 	)
 
 	jwtService := NewJwtService(db, cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTExpiresMinutes)
@@ -105,6 +113,7 @@ func main() {
 
 	worker.Stop()
 	rateLimiter.Stop()
+	jwtService.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -115,6 +124,8 @@ func main() {
 }
 
 func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStore, rateLimiter *RateLimiter, cfg *Config) {
+	r.Use(timeoutMiddleware(RequestTimeout))
+
 	r.Use(func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
@@ -134,7 +145,7 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 
 	r.Use(func(c *gin.Context) {
 		c.Set("rateLimiter", rateLimiter)
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxRequestBodySize)
 		c.Next()
 	})
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	crand "crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// ==================== Middleware ====================
+
+func timeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
+}
 
 // ==================== NanoId ====================
 
@@ -82,15 +94,16 @@ func (h *Handler) ReadinessCheck(c *gin.Context) {
 // ==================== Service ====================
 
 type Service struct {
-	cfg           *Config
-	userStore     *UserStore
-	msgStore      *MessageStore
-	groupStore    *GroupStore
-	groupMemStore *GroupMemberStore
-	friendStore   *FriendRequestStore
-	convPartStore *ConversationParticipantStore
-	idGenStore    *IdGeneratorStateStore
-	idGen         *IdGenerator
+	cfg              *Config
+	userStore        *UserStore
+	msgStore         *MessageStore
+	groupStore       *GroupStore
+	groupMemStore    *GroupMemberStore
+	friendStore      *FriendRequestStore
+	convPartStore    *ConversationParticipantStore
+	idGenStore       *IdGeneratorStateStore
+	idempotencyStore *MessageIdempotencyStore
+	idGen            *IdGenerator
 }
 
 func NewService(
@@ -102,18 +115,20 @@ func NewService(
 	friendStore *FriendRequestStore,
 	convPartStore *ConversationParticipantStore,
 	idGenStore *IdGeneratorStateStore,
+	idempotencyStore *MessageIdempotencyStore,
 	idGen *IdGenerator,
 ) *Service {
 	return &Service{
-		cfg:           cfg,
-		userStore:     userStore,
-		msgStore:      msgStore,
-		groupStore:    groupStore,
-		groupMemStore: groupMemStore,
-		friendStore:   friendStore,
-		convPartStore: convPartStore,
-		idGenStore:    idGenStore,
-		idGen:         idGen,
+		cfg:              cfg,
+		userStore:        userStore,
+		msgStore:         msgStore,
+		groupStore:       groupStore,
+		groupMemStore:    groupMemStore,
+		friendStore:      friendStore,
+		convPartStore:    convPartStore,
+		idGenStore:       idGenStore,
+		idempotencyStore: idempotencyStore,
+		idGen:            idGen,
 	}
 }
 
@@ -125,7 +140,7 @@ type NotificationPayload struct {
 	Data    map[string]interface{} `json:"data"`
 }
 
-func (s *Service) SendNotificationToUser(uid int64, notifType string, data map[string]interface{}) (int64, error) {
+func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifType string, data map[string]interface{}) (int64, error) {
 	convID := fmt.Sprintf("system_%d", uid)
 
 	payload := &NotificationPayload{
@@ -155,7 +170,7 @@ func (s *Service) SendNotificationToUser(uid int64, notifType string, data map[s
 		Ts:      ts,
 	}
 
-	_, err = s.msgStore.InsertMessage(tableName, msg)
+	_, err = s.msgStore.InsertMessage(ctx, tableName, msg)
 	if err != nil {
 		return 0, err
 	}
@@ -188,8 +203,8 @@ func (s *Service) sendSystemMessageTx(tx *sql.Tx, convID string, content []byte)
 	return msgID, nil
 }
 
-func (s *Service) SendFriendNotification(receiverUID, senderUID int64, requestID string) error {
-	_, err := s.SendNotificationToUser(receiverUID, "friend_request", map[string]interface{}{
+func (s *Service) SendFriendNotification(ctx context.Context, receiverUID, senderUID int64, requestID string) error {
+	_, err := s.SendNotificationToUser(ctx, receiverUID, "friend_request", map[string]interface{}{
 		"request_id": requestID,
 		"sender_uid": senderUID,
 		"action":     "received",
@@ -197,8 +212,8 @@ func (s *Service) SendFriendNotification(receiverUID, senderUID int64, requestID
 	return err
 }
 
-func (s *Service) SendFriendAcceptedNotification(senderUID, receiverUID int64, requestID string) error {
-	_, err := s.SendNotificationToUser(senderUID, "friend_request", map[string]interface{}{
+func (s *Service) SendFriendAcceptedNotification(ctx context.Context, senderUID, receiverUID int64, requestID string) error {
+	_, err := s.SendNotificationToUser(ctx, senderUID, "friend_request", map[string]interface{}{
 		"request_id":   requestID,
 		"receiver_uid": receiverUID,
 		"action":       "accepted",
@@ -206,8 +221,8 @@ func (s *Service) SendFriendAcceptedNotification(senderUID, receiverUID int64, r
 	return err
 }
 
-func (s *Service) SendGroupInviteNotification(uid int64, groupID, groupName string, inviterUID int64) error {
-	_, err := s.SendNotificationToUser(uid, "group_invite", map[string]interface{}{
+func (s *Service) SendGroupInviteNotification(ctx context.Context, uid int64, groupID, groupName string, inviterUID int64) error {
+	_, err := s.SendNotificationToUser(ctx, uid, "group_invite", map[string]interface{}{
 		"group_id":    groupID,
 		"group_name":  groupName,
 		"inviter_uid": inviterUID,

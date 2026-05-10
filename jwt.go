@@ -24,6 +24,7 @@ type JwtService struct {
 	expiresInMinutes int
 	blacklistMu      sync.RWMutex
 	blacklistCache   map[string]int64
+	stopCh           chan struct{}
 }
 
 func NewJwtService(db *sql.DB, secret, issuer string, expiresInMinutes int) *JwtService {
@@ -33,6 +34,7 @@ func NewJwtService(db *sql.DB, secret, issuer string, expiresInMinutes int) *Jwt
 		issuer:           issuer,
 		expiresInMinutes: expiresInMinutes,
 		blacklistCache:   make(map[string]int64),
+		stopCh:           make(chan struct{}),
 	}
 	js.loadBlacklistFromDB()
 	return js
@@ -101,10 +103,19 @@ func (j *JwtService) StartCleanup(interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			j.CleanupBlacklist()
+		for {
+			select {
+			case <-ticker.C:
+				j.CleanupBlacklist()
+			case <-j.stopCh:
+				return
+			}
 		}
 	}()
+}
+
+func (j *JwtService) Stop() {
+	close(j.stopCh)
 }
 
 func (j *JwtService) GenerateToken(user *User) (string, error) {
