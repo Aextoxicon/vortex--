@@ -348,10 +348,10 @@ func ExtractConversationType(convID string) string {
 		return ""
 	}
 	if convID[0] == 'p' {
-		return "private"
+		return "p"
 	}
 	if convID[0] == 'g' {
-		return "group"
+		return "g"
 	}
 	return ""
 }
