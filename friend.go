@@ -328,10 +328,26 @@ func ParsePrivateConv(convID string) (string, string, error) {
 	if !IsPrivateConv(convID) {
 		return "", "", errors.New("not a private conversation")
 	}
-	var a, b string
-	if _, err := fmt.Sscanf(convID, "p_%s_%s", &a, &b); err != nil {
-		return "", "", err
+	// 按第一个下划线分割，剩余部分再按最后一个下划线分割
+	if len(convID) < 3 || convID[0] != 'p' || convID[1] != '_' {
+		return "", "", errors.New("invalid private conversation format")
 	}
+	
+	rest := convID[2:] // 跳过 "p_"
+	lastUnderscore := -1
+	for i := len(rest) - 1; i >= 0; i-- {
+		if rest[i] == '_' {
+			lastUnderscore = i
+			break
+		}
+	}
+	
+	if lastUnderscore == -1 {
+		return "", "", errors.New("invalid private conversation format")
+	}
+	
+	a := rest[:lastUnderscore]
+	b := rest[lastUnderscore+1:]
 	return a, b, nil
 }
 
