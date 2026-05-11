@@ -222,6 +222,7 @@ func TestMessageStore_InsertMessage(t *testing.T) {
 
 	now := time.Now().UnixMilli()
 	msg := &Message{
+		MsgID:      time.Now().UnixNano(),
 		ConvID:     "conv_123",
 		FromUID:    1,
 		Content:    "Hello, World!",
@@ -253,6 +254,7 @@ func TestMessageStore_GetConversationMessages(t *testing.T) {
 	now := time.Now().UnixMilli()
 	for i := 0; i < 5; i++ {
 		_, err := msgStore.InsertMessage(ctx, tableName, &Message{
+			MsgID:      time.Now().UnixNano() + int64(i),
 			ConvID:     "conv_456",
 			FromUID:    1,
 			Content:    "Message " + string(rune('1'+i)),
