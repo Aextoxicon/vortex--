@@ -174,6 +174,7 @@ func (h *Handler) CheckNewMessages(c *gin.Context) {
 func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, content, clientMsgID string) (*SendMessageResult, error) {
 	uid := currentUser.ID
 
+	needsIdempotencyCleanup := false
 	if clientMsgID != "" {
 		isDup, existingMsgID, err := s.idempotencyStore.CheckAndInsert(ctx, uid, clientMsgID)
 		if err != nil {
@@ -188,8 +189,9 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 				Duplicate: true,
 			}, nil
 		}
+		needsIdempotencyCleanup = true
 		defer func() {
-			if clientMsgID != "" {
+			if needsIdempotencyCleanup {
 				s.idempotencyStore.UpdateMsgID(ctx, uid, clientMsgID, 0, convID)
 			}
 		}()
@@ -261,6 +263,7 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 		return nil, err
 	}
 	tx = nil
+	needsIdempotencyCleanup = false
 
 	result := &SendMessageResult{
 		MsgID:   fmt.Sprintf("%d", msgID),

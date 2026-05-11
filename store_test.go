@@ -214,7 +214,8 @@ func TestMessageStore_InsertMessage(t *testing.T) {
 	msgStore := &MessageStore{Store: store}
 	ctx := context.Background()
 
-	_, err := msgStore.CreateMessageTable("messages_20260102")
+	tableName := MessageTableNameByDate(time.Now())
+	_, err := msgStore.CreateMessageTable(tableName)
 	if err != nil {
 		t.Fatalf("failed to create message table: %v", err)
 	}
@@ -228,7 +229,7 @@ func TestMessageStore_InsertMessage(t *testing.T) {
 		IsRecalled: 0,
 	}
 
-	msgID, err := msgStore.InsertMessage(ctx, "messages_20260102", msg)
+	msgID, err := msgStore.InsertMessage(ctx, tableName, msg)
 	if err != nil {
 		t.Fatalf("failed to insert message: %v", err)
 	}
@@ -243,14 +244,15 @@ func TestMessageStore_GetConversationMessages(t *testing.T) {
 	msgStore := &MessageStore{Store: store}
 	ctx := context.Background()
 
-	_, err := msgStore.CreateMessageTable("messages_20260103")
+	tableName := MessageTableNameByDate(time.Now())
+	_, err := msgStore.CreateMessageTable(tableName)
 	if err != nil {
 		t.Fatalf("failed to create message table: %v", err)
 	}
 
 	now := time.Now().UnixMilli()
 	for i := 0; i < 5; i++ {
-		_, err := msgStore.InsertMessage(ctx, "messages_20260103", &Message{
+		_, err := msgStore.InsertMessage(ctx, tableName, &Message{
 			ConvID:     "conv_456",
 			FromUID:    1,
 			Content:    "Message " + string(rune('1'+i)),
@@ -262,7 +264,7 @@ func TestMessageStore_GetConversationMessages(t *testing.T) {
 		}
 	}
 
-	messages, err := msgStore.GetConversationMessages(ctx, "messages_20260103", "conv_456", 10, 0)
+	messages, err := msgStore.GetConversationMessages(ctx, tableName, "conv_456", 10, 0)
 	if err != nil {
 		t.Fatalf("failed to get messages: %v", err)
 	}
@@ -310,30 +312,42 @@ func TestGroupStore_Insert(t *testing.T) {
 
 func TestGroupMemberStore_Insert(t *testing.T) {
 	store, _, _ := setupTestStore(t)
+	userStore := &UserStore{Store: store}
 	groupStore := &GroupStore{Store: store}
 	groupMemStore := &GroupMemberStore{Store: store}
 	ctx := context.Background()
 
 	now := time.Now().UnixMilli()
 
+	userID, err := userStore.Insert(ctx, &User{
+		Username:  "groupmember",
+		PwdHash:   "hash",
+		PublicID:  "pub_groupmember",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
 	group := &Group{
 		GroupID:     "grp_members",
 		Name:        "Members Group",
 		Description: "",
-		OwnerID:     1,
+		OwnerID:     userID,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		IsDeleted:   0,
 	}
 
-	_, err := groupStore.Insert(ctx, group)
+	_, err = groupStore.Insert(ctx, group)
 	if err != nil {
 		t.Fatalf("failed to create group: %v", err)
 	}
 
 	member := &GroupMember{
 		GroupID:  "grp_members",
-		UID:      100,
+		UID:      userID,
 		Role:     "member",
 		JoinedAt: now,
 	}
@@ -376,17 +390,31 @@ func TestFriendRequestStore_Insert(t *testing.T) {
 
 func TestConversationParticipantStore_Exists(t *testing.T) {
 	store, _, _ := setupTestStore(t)
+	userStore := &UserStore{Store: store}
 	convPartStore := &ConversationParticipantStore{Store: store}
 	ctx := context.Background()
 
+	now := time.Now().UnixMilli()
+
+	userID, err := userStore.Insert(ctx, &User{
+		Username:  "convparticipant",
+		PwdHash:   "hash",
+		PublicID:  "pub_convparticipant",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
 	participant := &ConversationParticipant{
 		ConvID:    "conv_test",
-		UserID:    1,
-		JoinTs:    time.Now().UnixMilli(),
+		UserID:    userID,
+		JoinTs:    now,
 		IsBlocked: 0,
 	}
 
-	_, err := store.db.ExecContext(ctx, `
+	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO conversation_participants (conv_id, user_id, join_ts, is_blocked)
 		VALUES ($1, $2, $3, $4)`,
 		participant.ConvID, participant.UserID, participant.JoinTs, participant.IsBlocked,
@@ -395,7 +423,7 @@ func TestConversationParticipantStore_Exists(t *testing.T) {
 		t.Fatalf("failed to insert participant: %v", err)
 	}
 
-	exists, err := convPartStore.Exists(ctx, "conv_test", 1)
+	exists, err := convPartStore.Exists(ctx, "conv_test", userID)
 	if err != nil {
 		t.Fatalf("failed to check existence: %v", err)
 	}
