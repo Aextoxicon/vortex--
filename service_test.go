@@ -126,20 +126,40 @@ func TestService_SendMessage(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 
 	ctx := context.Background()
-	userID, err := svc.CreateUser(ctx, "sender", "Test1234!", "sender@example.com")
+	user1ID, err := svc.CreateUser(ctx, "sender", "Test1234!", "sender@example.com")
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	user, err := svc.GetUserByID(ctx, userID)
+	user2ID, err := svc.CreateUser(ctx, "receiver", "Test1234!", "receiver@example.com")
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	user1, err := svc.GetUserByID(ctx, user1ID)
 	if err != nil {
 		t.Fatalf("failed to get user: %v", err)
 	}
 
-	convID := "conv_test_123"
+	publicID1, err := svc.GetPublicIDByUserID(ctx, user1ID)
+	if err != nil {
+		t.Fatalf("failed to get public ID: %v", err)
+	}
+
+	publicID2, err := svc.GetPublicIDByUserID(ctx, user2ID)
+	if err != nil {
+		t.Fatalf("failed to get public ID: %v", err)
+	}
+
+	convID := PrivateConvID(publicID1, publicID2)
 	content := "Hello, World!"
 
-	result, err := svc.SendMessage(ctx, user, convID, content, "")
+	_, _, err = svc.SendFriendRequest(ctx, user1ID, user2ID, "")
+	if err != nil {
+		t.Fatalf("failed to send friend request: %v", err)
+	}
+
+	result, err := svc.SendMessage(ctx, user1, convID, content, "")
 	if err != nil {
 		t.Fatalf("failed to send message: %v", err)
 	}
@@ -210,17 +230,24 @@ func TestService_SendFriendRequest(t *testing.T) {
 		t.Fatalf("failed to create user2: %v", err)
 	}
 
+	// 先让 user2 向 user1 发送请求
+	_, _, err = svc.SendFriendRequest(ctx, user2, user1, "")
+	if err != nil {
+		t.Fatalf("failed to send friend request from user2: %v", err)
+	}
+
+	// 然后 user1 向 user2 发送请求，应该自动接受
 	requestID, autoAccepted, err := svc.SendFriendRequest(ctx, user1, user2, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
 	}
 
-	if requestID <= 0 {
-		t.Errorf("expected positive request ID, got %d", requestID)
-	}
-
 	if !autoAccepted {
 		t.Error("expected friend request to be auto-accepted")
+	}
+
+	if requestID != 0 {
+		t.Errorf("expected requestID to be 0 for auto-accepted, got %d", requestID)
 	}
 }
 
@@ -228,28 +255,48 @@ func TestService_SendMessage_Idempotency(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 
 	ctx := context.Background()
-	userID, err := svc.CreateUser(ctx, "sender", "Test1234!", "sender@example.com")
+	user1ID, err := svc.CreateUser(ctx, "sender", "Test1234!", "sender@example.com")
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	user, err := svc.GetUserByID(ctx, userID)
+	user2ID, err := svc.CreateUser(ctx, "receiver", "Test1234!", "receiver@example.com")
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	user1, err := svc.GetUserByID(ctx, user1ID)
 	if err != nil {
 		t.Fatalf("failed to get user: %v", err)
 	}
 
-	convID := "conv_test"
+	publicID1, err := svc.GetPublicIDByUserID(ctx, user1ID)
+	if err != nil {
+		t.Fatalf("failed to get public ID: %v", err)
+	}
+
+	publicID2, err := svc.GetPublicIDByUserID(ctx, user2ID)
+	if err != nil {
+		t.Fatalf("failed to get public ID: %v", err)
+	}
+
+	convID := PrivateConvID(publicID1, publicID2)
 	content := "Hello"
 	clientMsgID := "client_msg_123"
 
+	_, _, err = svc.SendFriendRequest(ctx, user1ID, user2ID, "")
+	if err != nil {
+		t.Fatalf("failed to send friend request: %v", err)
+	}
+
 	// First send
-	result1, err := svc.SendMessage(ctx, user, convID, content, clientMsgID)
+	result1, err := svc.SendMessage(ctx, user1, convID, content, clientMsgID)
 	if err != nil {
 		t.Fatalf("failed to send message: %v", err)
 	}
 
 	// Second send with same clientMsgID (should be idempotent)
-	result2, err := svc.SendMessage(ctx, user, convID, content, clientMsgID)
+	result2, err := svc.SendMessage(ctx, user1, convID, content, clientMsgID)
 	if err != nil {
 		t.Fatalf("failed to send duplicate message: %v", err)
 	}
