@@ -60,6 +60,7 @@ func setupTestService(t *testing.T) (*Service, *sql.DB, *testutil.PostgresContai
 		userStore, msgStore, groupStore, groupMemStore,
 		friendStore, convPartStore,
 		idGenStateStore, idempotencyStore, idGen,
+		nil,
 	)
 
 	return svc, db, pgContainer

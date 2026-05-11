@@ -36,6 +36,13 @@ type Config struct {
 	WorkerTableCreateIntervalHours       int
 	WorkerMaintenanceInitialDelayMinutes int
 	WorkerMaintenanceIntervalHours       int
+
+	// S3 配置（可选，为空则不启用文件存储）
+	S3Bucket    string
+	S3Region    string
+	S3Endpoint  string
+	S3AccessKey string
+	S3SecretKey string
 }
 
 // 可选配置的默认值（硬编码，需自定义时通过环境变量覆盖）
@@ -138,6 +145,13 @@ func LoadConfig() *Config {
 		WorkerTableCreateIntervalHours:       envInt("WORKER_TABLE_CREATE_INTERVAL_HOURS", defaultWorkerCreateInterval),
 		WorkerMaintenanceInitialDelayMinutes: envInt("WORKER_MAINTENANCE_INITIAL_DELAY_MINUTES", defaultMaintenanceDelay),
 		WorkerMaintenanceIntervalHours:       envInt("WORKER_MAINTENANCE_INTERVAL_HOURS", defaultMaintenanceInterval),
+
+		// S3 配置
+		S3Bucket:    os.Getenv("S3_BUCKET"),
+		S3Region:    envString("S3_REGION", "us-east-1"),
+		S3Endpoint:  os.Getenv("S3_ENDPOINT"),
+		S3AccessKey: os.Getenv("S3_ACCESS_KEY"),
+		S3SecretKey: os.Getenv("S3_SECRET_KEY"),
 	}
 
 	if cfg.Port != "" && cfg.Port[0] != ':' {

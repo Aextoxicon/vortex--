@@ -63,11 +63,20 @@ func main() {
 	idGen := NewIdGenerator(cfg, idGenStateStore, msgStore, cfg.NodeID)
 	idGen.Init()
 
+	var s3Service *S3Service
+	if cfg.S3Bucket != "" {
+		s3Service, err = NewS3Service(context.Background(), cfg.S3Bucket, cfg.S3Region, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey)
+		if err != nil {
+			slog.Warn("failed to init S3 service, file upload will be disabled", "error", err)
+		}
+	}
+
 	svc := NewService(
 		cfg,
 		userStore, msgStore, groupStore, groupMemStore,
 		friendStore, convPartStore,
 		idGenStateStore, idempotencyStore, idGen,
+		s3Service,
 	)
 
 	jwtService := NewJwtService(db, cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTExpiresMinutes)
@@ -186,6 +195,8 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 			auth.POST("/friends/request/:requestId/accept", h.AcceptFriendRequest)
 			auth.POST("/friends/request/:requestId/reject", h.RejectFriendRequest)
 			auth.DELETE("/friends/request/:requestId", h.CancelFriendRequest)
+
+			auth.POST("/files/presign", h.GetPresignURL)
 		}
 	}
 }

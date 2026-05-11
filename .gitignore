@@ -73,6 +73,7 @@ Icon
 .Trashes
 .VolumeIcon.icns
 .com.apple.timemachine.donotpresent
+.DS_Store
 
 # Directories potentially created on remote AFP share
 .AppleDB
@@ -104,3 +105,4 @@ coverage/
 *.coverage
 *.coverage.xml
 vortex
+*.txt

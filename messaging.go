@@ -378,7 +378,48 @@ func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID
 	msg.IsRecalled = 1
 	msg.Content = ""
 	_, err = s.msgStore.UpdateMessage(ctx, tableName, msg)
+	if err != nil {
+		return err
+	}
+
+	// 删除 S3 文件（如果是文件消息）
+	if s.s3Service != nil {
+		fileKey := extractFileKeyFromMessage(msg)
+		if fileKey != "" {
+			_ = s.s3Service.DeleteObject(ctx, fileKey)
+		}
+	}
+
+	// 插入撤回通知消息（content 存储原消息 ID）
+	recallMsgID, err := s.idGen.GenerateID()
+	if err != nil {
+		return err
+	}
+
+	recallTs := time.Now().UnixMilli() - s.cfg.EpochTime
+	recallTableName := MessageTableNameByTs(recallTs)
+
+	recallMsg := &Message{
+		MsgID:      recallMsgID,
+		ConvID:     msg.ConvID,
+		FromUID:    userID,
+		Content:    fmt.Sprintf("%d", msgID),
+		Ts:         recallTs,
+		IsRecalled: 1,
+	}
+
+	_, err = s.msgStore.InsertMessage(ctx, recallTableName, recallMsg)
 	return err
+}
+
+func extractFileKeyFromMessage(msg *Message) string {
+	var img ImageContent
+	if err := json.Unmarshal([]byte(msg.Content), &img); err == nil {
+		if img.Type == "image" && img.Content != "" {
+			return img.Content
+		}
+	}
+	return ""
 }
 
 func (s *Service) generateConversationID(ctx context.Context, msgType string, uid int64, targetPublicID string) (string, error) {

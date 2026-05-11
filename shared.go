@@ -104,6 +104,7 @@ type Service struct {
 	idGenStore       *IdGeneratorStateStore
 	idempotencyStore *MessageIdempotencyStore
 	idGen            *IdGenerator
+	s3Service        *S3Service
 }
 
 func NewService(
@@ -117,6 +118,7 @@ func NewService(
 	idGenStore *IdGeneratorStateStore,
 	idempotencyStore *MessageIdempotencyStore,
 	idGen *IdGenerator,
+	s3Service *S3Service,
 ) *Service {
 	return &Service{
 		cfg:              cfg,
@@ -129,6 +131,7 @@ func NewService(
 		idGenStore:       idGenStore,
 		idempotencyStore: idempotencyStore,
 		idGen:            idGen,
+		s3Service:        s3Service,
 	}
 }
 
