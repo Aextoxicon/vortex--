@@ -6,9 +6,7 @@ import (
 )
 
 func TestJwtService_GenerateAndValidate(t *testing.T) {
-	_, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	_, db, _ := setupTestStore(t)
 
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("failed to run migrations: %v", err)
@@ -51,9 +49,7 @@ func TestJwtService_GenerateAndValidate(t *testing.T) {
 }
 
 func TestJwtService_Blacklist(t *testing.T) {
-	_, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	_, db, _ := setupTestStore(t)
 
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("failed to run migrations: %v", err)
@@ -82,9 +78,7 @@ func TestJwtService_Blacklist(t *testing.T) {
 }
 
 func TestJwtService_Cleanup(t *testing.T) {
-	_, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	_, db, _ := setupTestStore(t)
 
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("failed to run migrations: %v", err)
@@ -110,9 +104,7 @@ func TestJwtService_Cleanup(t *testing.T) {
 }
 
 func TestJwtService_InvalidToken(t *testing.T) {
-	_, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	_, db, _ := setupTestStore(t)
 
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("failed to run migrations: %v", err)
@@ -135,9 +127,7 @@ func TestJwtService_InvalidToken(t *testing.T) {
 }
 
 func TestJwtService_WrongSecret(t *testing.T) {
-	_, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	_, db, _ := setupTestStore(t)
 
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("failed to run migrations: %v", err)
@@ -169,9 +159,7 @@ func TestJwtService_WrongSecret(t *testing.T) {
 }
 
 func TestJwtService_BlacklistPersistence(t *testing.T) {
-	_, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	_, db, _ := setupTestStore(t)
 
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("failed to run migrations: %v", err)

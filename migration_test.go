@@ -21,7 +21,6 @@ func setupTestDB(t *testing.T) (*sql.DB, *testutil.PostgresContainer) {
 
 	db, err := sql.Open("postgres", pgContainer.ConnectionString)
 	if err != nil {
-		pgContainer.Cleanup(t)
 		t.Fatalf("failed to open database connection: %v", err)
 	}
 

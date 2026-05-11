@@ -22,13 +22,11 @@ func setupTestStore(t *testing.T) (*Store, *sql.DB, *testutil.PostgresContainer)
 
 	db, err := sql.Open("postgres", pgContainer.ConnectionString)
 	if err != nil {
-		pgContainer.Cleanup(t)
 		t.Fatalf("failed to open database connection: %v", err)
 	}
 
 	if err := RunMigrations(db); err != nil {
 		db.Close()
-		pgContainer.Cleanup(t)
 		t.Fatalf("failed to run migrations: %v", err)
 	}
 

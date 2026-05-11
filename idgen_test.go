@@ -7,9 +7,7 @@ import (
 )
 
 func TestIDGenerator_GenerateID(t *testing.T) {
-	store, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	store, _, _ := setupTestStore(t)
 
 	idGenSt := &IdGeneratorStateStore{Store: store}
 	msgSt := &MessageStore{Store: store}
@@ -44,9 +42,7 @@ func TestIDGenerator_GenerateID(t *testing.T) {
 }
 
 func TestIDGenerator_Concurrent(t *testing.T) {
-	store, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	store, _, _ := setupTestStore(t)
 
 	idGenSt := &IdGeneratorStateStore{Store: store}
 	msgSt := &MessageStore{Store: store}
@@ -103,9 +99,7 @@ func TestIDGenerator_Concurrent(t *testing.T) {
 }
 
 func TestIDGenerator_TimestampExtraction(t *testing.T) {
-	store, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	store, _, _ := setupTestStore(t)
 
 	idGenSt := &IdGeneratorStateStore{Store: store}
 	msgSt := &MessageStore{Store: store}
@@ -145,9 +139,7 @@ func TestIDGenerator_TimestampExtraction(t *testing.T) {
 }
 
 func TestIDGenerator_NodeID(t *testing.T) {
-	store, db, pgContainer := setupTestStore(t)
-	defer db.Close()
-	defer pgContainer.Cleanup(t)
+	store, _, _ := setupTestStore(t)
 
 	idGenSt := &IdGeneratorStateStore{Store: store}
 	msgSt := &MessageStore{Store: store}
