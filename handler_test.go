@@ -136,19 +136,19 @@ func TestHandler_Register(t *testing.T) {
 			name:       "weak password",
 			body:       `{"username":"weakuser","password":"123","email":"weak@example.com"}`,
 			wantStatus: http.StatusBadRequest,
-			wantErr:    "weak_password",
+			wantErr:    "Password must be 8-16 characters",
 		},
 		{
 			name:       "invalid username",
 			body:       `{"username":"ab","password":"Test1234!","email":"ab@example.com"}`,
 			wantStatus: http.StatusBadRequest,
-			wantErr:    "invalid_username",
+			wantErr:    "Username must be 3-20 characters",
 		},
 		{
 			name:       "missing fields",
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
-			wantErr:    "invalid_input",
+			wantErr:    "Invalid input",
 		},
 	}
 
@@ -196,6 +196,12 @@ func TestHandler_Register_Duplicate(t *testing.T) {
 func TestHandler_Login(t *testing.T) {
 	handler, svc, _ := setupTestHandler(t)
 	r := setupTestGin()
+	rl := NewRateLimiter()
+	defer rl.Stop()
+	r.Use(func(c *gin.Context) {
+		c.Set("rateLimiter", rl)
+		c.Next()
+	})
 	r.POST("/api/auth/login", handler.Login)
 
 	username := uniqueUsername()
