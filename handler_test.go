@@ -471,9 +471,10 @@ func TestHandler_JoinGroup_NotFound(t *testing.T) {
 func TestHandler_FriendRequestFlow(t *testing.T) {
 	handler, svc, _ := setupTestHandler(t)
 	r := setupTestGin()
-	r.POST("/api/friends/request/:targetPublicId", jwtMiddleware(handler.jwt), handler.SendFriendRequest)
-	r.GET("/api/friends/requests", jwtMiddleware(handler.jwt), handler.GetFriendRequests)
+	// 先注册更具体的路由，避免与通配符路由冲突
 	r.POST("/api/friends/request/:requestId/accept", jwtMiddleware(handler.jwt), handler.AcceptFriendRequest)
+	r.GET("/api/friends/requests", jwtMiddleware(handler.jwt), handler.GetFriendRequests)
+	r.POST("/api/friends/request/:targetPublicId", jwtMiddleware(handler.jwt), handler.SendFriendRequest)
 
 	ctx := context.Background()
 	user1 := createTestUser(t, svc)
