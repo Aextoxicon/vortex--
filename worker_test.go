@@ -1,9 +1,57 @@
 package main
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"testing"
 	"time"
+
+	"vortex/test/testutil"
+
+	_ "github.com/lib/pq"
 )
+
+func setupTestWorker(t *testing.T) (*Worker, *sql.DB, *testutil.PostgresContainer) {
+	t.Helper()
+
+	ctx := context.Background()
+	pgContainer, err := testutil.NewPostgresContainer(ctx)
+	if err != nil {
+		t.Fatalf("failed to start postgres container: %v", err)
+	}
+
+	db, err := sql.Open("postgres", pgContainer.ConnectionString)
+	if err != nil {
+		t.Fatalf("failed to open database connection: %v", err)
+	}
+
+	if err := RunMigrations(db); err != nil {
+		db.Close()
+		t.Fatalf("failed to run migrations: %v", err)
+	}
+
+	t.Cleanup(func() {
+		db.Close()
+		pgContainer.Cleanup(t)
+	})
+
+	store := NewStore(db)
+	msgStore := &MessageStore{Store: store}
+
+	cfg := &Config{
+		NodeID:                               1,
+		WorkerTableCreateIntervalHours:       24,
+		WorkerMaintenanceInitialDelayMinutes: 1,
+		WorkerMaintenanceIntervalHours:       24,
+		MessageRetentionDays:                 7,
+	}
+
+	svc := &Service{}
+	worker := NewWorker(cfg, svc, msgStore)
+
+	return worker, db, pgContainer
+}
 
 func TestMessageTableNameByDate(t *testing.T) {
 	tests := []struct {
@@ -86,5 +134,193 @@ func TestCalculateDaysToSunday(t *testing.T) {
 				t.Errorf("daysToSunday for %v = %d, want %d", tt.date, daysToSunday, tt.expected)
 			}
 		})
+	}
+}
+
+func TestWorker_CreateTablesFromTodayToSunday(t *testing.T) {
+	worker, db, _ := setupTestWorker(t)
+	ctx := context.Background()
+
+	worker.createTablesFromTodayToSunday()
+
+	now := time.Now().UTC()
+	dayOfWeek := int(now.Weekday())
+	daysToSunday := 0
+	if dayOfWeek != 0 {
+		daysToSunday = 7 - dayOfWeek
+	}
+
+	for offset := 0; offset <= daysToSunday; offset++ {
+		date := now.AddDate(0, 0, offset)
+		tableName := MessageTableNameByDate(date)
+
+		var exists bool
+		err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT FROM information_schema.tables 
+				WHERE table_schema = 'public' 
+				AND table_name = $1
+			)`, tableName).Scan(&exists)
+
+		if err != nil {
+			t.Errorf("failed to check table %s: %v", tableName, err)
+			continue
+		}
+
+		if !exists {
+			t.Errorf("table %s was not created", tableName)
+		}
+	}
+}
+
+func TestWorker_CreateWeekTables(t *testing.T) {
+	worker, db, _ := setupTestWorker(t)
+	ctx := context.Background()
+
+	worker.createWeekTables()
+
+	now := time.Now().UTC()
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	nextMonday := now.AddDate(0, 0, 8-weekday)
+
+	for offset := 0; offset < 7; offset++ {
+		date := nextMonday.AddDate(0, 0, offset)
+		tableName := MessageTableNameByDate(date)
+
+		var exists bool
+		err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT FROM information_schema.tables 
+				WHERE table_schema = 'public' 
+				AND table_name = $1
+			)`, tableName).Scan(&exists)
+
+		if err != nil {
+			t.Errorf("failed to check table %s: %v", tableName, err)
+			continue
+		}
+
+		if !exists {
+			t.Errorf("table %s was not created", tableName)
+		}
+	}
+}
+
+func TestWorker_RunAnalyze(t *testing.T) {
+	worker, db, _ := setupTestWorker(t)
+	ctx := context.Background()
+
+	tableName := MessageTableNameByDate(time.Now())
+	_, err := worker.msgStore.CreateMessageTable(tableName)
+	if err != nil {
+		t.Fatalf("failed to create message table: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, fmt.Sprintf(
+		"INSERT INTO %s (msg_id, conv_id, from_uid, content, ts) VALUES ($1, $2, $3, $4, $5)",
+		tableName),
+		time.Now().UnixNano(), "conv_test", 123, "test message", time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("failed to insert test message: %v", err)
+	}
+
+	worker.runAnalyze()
+
+	var relname string
+	err = db.QueryRowContext(ctx, `
+		SELECT relname FROM pg_stat_user_tables 
+		WHERE relname = $1 AND last_analyze IS NOT NULL`, tableName).Scan(&relname)
+
+	if err != nil {
+		t.Errorf("ANALYZE was not run on table %s: %v", tableName, err)
+	}
+}
+
+func TestWorker_DropExpiredPartitions(t *testing.T) {
+	worker, db, _ := setupTestWorker(t)
+	ctx := context.Background()
+
+	expiredDate := time.Now().UTC().AddDate(0, 0, -10)
+	expiredTableName := MessageTableNameByDate(expiredDate)
+
+	_, err := worker.msgStore.CreateMessageTable(expiredTableName)
+	if err != nil {
+		t.Fatalf("failed to create expired table: %v", err)
+	}
+
+	validDate := time.Now().UTC()
+	validTableName := MessageTableNameByDate(validDate)
+
+	_, err = worker.msgStore.CreateMessageTable(validTableName)
+	if err != nil {
+		t.Fatalf("failed to create valid table: %v", err)
+	}
+
+	var countBefore int
+	err = db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM pg_inherits 
+		WHERE inhparent = 'messages'::regclass`).Scan(&countBefore)
+	if err != nil {
+		t.Fatalf("failed to count partitions: %v", err)
+	}
+
+	if countBefore < 2 {
+		t.Fatalf("expected at least 2 partitions, got %d", countBefore)
+	}
+
+	worker.dropExpiredPartitions()
+
+	var exists bool
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT FROM information_schema.tables 
+			WHERE table_schema = 'public' 
+			AND table_name = $1
+		)`, expiredTableName).Scan(&exists)
+
+	if err != nil {
+		t.Errorf("failed to check expired table: %v", err)
+	}
+
+	if exists {
+		t.Errorf("expired table %s was not dropped", expiredTableName)
+	}
+
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT FROM information_schema.tables 
+			WHERE table_schema = 'public' 
+			AND table_name = $1
+		)`, validTableName).Scan(&exists)
+
+	if err != nil {
+		t.Errorf("failed to check valid table: %v", err)
+	}
+
+	if !exists {
+		t.Errorf("valid table %s was incorrectly dropped", validTableName)
+	}
+}
+
+func TestWorker_StartStop(t *testing.T) {
+	worker, _, _ := setupTestWorker(t)
+
+	done := make(chan struct{})
+	go func() {
+		worker.Start()
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	worker.Stop()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not stop within timeout")
 	}
 }
