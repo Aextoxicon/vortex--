@@ -471,10 +471,10 @@ func TestHandler_JoinGroup_NotFound(t *testing.T) {
 func TestHandler_FriendRequestFlow(t *testing.T) {
 	handler, svc, _ := setupTestHandler(t)
 	r := setupTestGin()
-	// 先注册更具体的路由，避免与通配符路由冲突
-	r.POST("/api/friends/request/:requestId/accept", jwtMiddleware(handler.jwt), handler.AcceptFriendRequest)
+	// 为了避免路由冲突，使用更具体的路由路径
+	r.POST("/api/friends/request/send/:targetPublicId", jwtMiddleware(handler.jwt), handler.SendFriendRequest)
 	r.GET("/api/friends/requests", jwtMiddleware(handler.jwt), handler.GetFriendRequests)
-	r.POST("/api/friends/request/:targetPublicId", jwtMiddleware(handler.jwt), handler.SendFriendRequest)
+	r.POST("/api/friends/request/accept/:requestId", jwtMiddleware(handler.jwt), handler.AcceptFriendRequest)
 
 	ctx := context.Background()
 	user1 := createTestUser(t, svc)
@@ -489,7 +489,7 @@ func TestHandler_FriendRequestFlow(t *testing.T) {
 	token2 := generateToken(handler, user2)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/friends/request/"+user2PublicID, nil)
+	req, _ := http.NewRequest("POST", "/api/friends/request/send/"+user2PublicID, nil)
 	req.Header.Set("Authorization", authHeader(token1))
 	r.ServeHTTP(w, req)
 
@@ -524,7 +524,7 @@ func TestHandler_FriendRequestFlow(t *testing.T) {
 	requestID := int64(sendResp["id"].(float64))
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/api/friends/request/"+fmt.Sprintf("%d", requestID)+"/accept", nil)
+	req, _ = http.NewRequest("POST", "/api/friends/request/accept/"+fmt.Sprintf("%d", requestID), nil)
 	req.Header.Set("Authorization", authHeader(token2))
 	r.ServeHTTP(w, req)
 
@@ -536,8 +536,8 @@ func TestHandler_FriendRequestFlow(t *testing.T) {
 func TestHandler_CancelFriendRequest(t *testing.T) {
 	handler, svc, _ := setupTestHandler(t)
 	r := setupTestGin()
-	r.POST("/api/friends/request/:targetPublicId", jwtMiddleware(handler.jwt), handler.SendFriendRequest)
-	r.DELETE("/api/friends/request/:requestId", jwtMiddleware(handler.jwt), handler.CancelFriendRequest)
+	r.POST("/api/friends/request/send/:targetPublicId", jwtMiddleware(handler.jwt), handler.SendFriendRequest)
+	r.DELETE("/api/friends/request/cancel/:requestId", jwtMiddleware(handler.jwt), handler.CancelFriendRequest)
 
 	ctx := context.Background()
 	user1 := createTestUser(t, svc)
@@ -551,7 +551,7 @@ func TestHandler_CancelFriendRequest(t *testing.T) {
 	token1 := generateToken(handler, user1)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/friends/request/"+user2PublicID, nil)
+	req, _ := http.NewRequest("POST", "/api/friends/request/send/"+user2PublicID, nil)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", authHeader(token1))
 	r.ServeHTTP(w, req)
@@ -565,7 +565,7 @@ func TestHandler_CancelFriendRequest(t *testing.T) {
 	requestID := int64(sendResp["id"].(float64))
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("DELETE", "/api/friends/request/"+fmt.Sprintf("%d", requestID), nil)
+	req, _ = http.NewRequest("DELETE", "/api/friends/request/cancel/"+fmt.Sprintf("%d", requestID), nil)
 	req.Header.Set("Authorization", authHeader(token1))
 	r.ServeHTTP(w, req)
 
