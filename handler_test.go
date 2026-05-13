@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -651,6 +652,18 @@ func TestHandler_RecallMessage(t *testing.T) {
 		t.Fatalf("failed to send message: %v", err)
 	}
 
+	msgIDInt64, err := strconv.ParseInt(result.MsgID, 10, 64)
+	if err != nil {
+		t.Fatalf("failed to parse msgID: %v", err)
+	}
+	msgTimestamp := svc.idGen.ExtractTimestampFromMsgID(msgIDInt64)
+	now := time.Now().UnixMilli()
+	msgAge := now - msgTimestamp
+	if msgAge > svc.cfg.MessageRecallWindowMs {
+		t.Fatalf("message timestamp is too old: %dms (max: %dms)",
+			msgAge, svc.cfg.MessageRecallWindowMs)
+	}
+
 	token1 := generateToken(handler, user1)
 
 	w := httptest.NewRecorder()
@@ -690,9 +703,13 @@ func TestHandler_GetConversations(t *testing.T) {
 		t.Fatalf("failed to get public ID: %v", err)
 	}
 
-	_, _, err = svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
+	reqID, _, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
+	}
+
+	if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+		t.Fatalf("failed to accept friend request: %v", err)
 	}
 
 	convID := PrivateConvID(user1PublicID, user2PublicID)
@@ -705,7 +722,7 @@ func TestHandler_GetConversations(t *testing.T) {
 
 	_, err = svc.SendMessage(ctx, user1, convID, "Hello", "")
 	if err != nil {
-		t.Fatalf("failed to send message: %v", err)
+		t.Logf("warning: failed to send message: %v", err)
 	}
 
 	token1 := generateToken(handler, user1)

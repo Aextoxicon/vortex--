@@ -310,17 +310,27 @@ func TestWorker_StartStop(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		worker.Start()
-		close(done)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
-	worker.Stop()
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		worker.Stop()
+	}()
+
+	select {
+	case <-stopDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker did not stop within timeout")
+	}
 
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not stop within timeout")
+		t.Fatal("worker goroutines did not complete")
 	}
 }

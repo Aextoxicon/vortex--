@@ -13,6 +13,8 @@ type Worker struct {
 	msgStore *MessageStore
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
+	mu       sync.Mutex
+	started  bool
 }
 
 func NewWorker(cfg *Config, svc *Service, msgStore *MessageStore) *Worker {
@@ -25,6 +27,14 @@ func NewWorker(cfg *Config, svc *Service, msgStore *MessageStore) *Worker {
 }
 
 func (w *Worker) Start() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.started {
+		return
+	}
+	w.started = true
+
 	w.wg.Add(2)
 	go w.runTableManager()
 	go w.runMaintenance()
@@ -32,6 +42,14 @@ func (w *Worker) Start() {
 }
 
 func (w *Worker) Stop() {
+	w.mu.Lock()
+	if !w.started {
+		w.mu.Unlock()
+		return
+	}
+	w.started = false
+	w.mu.Unlock()
+
 	close(w.stopCh)
 	w.wg.Wait()
 	slog.Info("Worker stopped")
