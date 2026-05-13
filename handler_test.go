@@ -28,17 +28,22 @@ func setupTestHandler(t *testing.T) (*Handler, *Service, *JwtService) {
 	svc, db, _ := setupTestService(t)
 
 	cfg := &Config{
-		NodeID:            1,
-		PublicIDLength:    12,
-		BCryptCost:        10,
-		JWTSecret:         "test-secret-key-min-32-chars-long!!",
-		JWTIssuer:         "test-issuer",
-		JWTExpiresMinutes: 60,
-		DefaultPageSize:   20,
-		MaxPageSize:       100,
-		EpochTime:         1700000000000,
-		SegmentDurationMs: 3600000,
-		SegmentSize:       1000,
+		NodeID:                               1,
+		PublicIDLength:                       12,
+		BCryptCost:                           10,
+		JWTSecret:                            "test-secret-key-min-32-chars-long!!",
+		JWTIssuer:                            "test-issuer",
+		JWTExpiresMinutes:                    60,
+		DefaultPageSize:                      20,
+		MaxPageSize:                          100,
+		EpochTime:                            1700000000000,
+		SegmentDurationMs:                    3600000,
+		SegmentSize:                          1000,
+		MessageRecallWindowMs:                120000,
+		WorkerTableCreateIntervalHours:       24,
+		WorkerMaintenanceInitialDelayMinutes: 1,
+		WorkerMaintenanceIntervalHours:       24,
+		MessageRetentionDays:                 7,
 	}
 
 	jwtService := NewJwtService(db, cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTExpiresMinutes)
@@ -703,13 +708,18 @@ func TestHandler_GetConversations(t *testing.T) {
 		t.Fatalf("failed to get public ID: %v", err)
 	}
 
-	reqID, _, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
+	reqID, autoAccepted, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
 	}
 
-	if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
-		t.Fatalf("failed to accept friend request: %v", err)
+	if !autoAccepted {
+		if reqID == 0 {
+			t.Fatal("expected non-zero request ID")
+		}
+		if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+			t.Fatalf("failed to accept friend request: %v", err)
+		}
 	}
 
 	convID := PrivateConvID(user1PublicID, user2PublicID)
