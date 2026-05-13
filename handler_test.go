@@ -316,9 +316,15 @@ func TestHandler_SendMessage(t *testing.T) {
 		t.Fatalf("failed to get public ID: %v", err)
 	}
 
-	_, _, err = svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
+	reqID, _, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
+	}
+
+	if reqID > 0 {
+		if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+			t.Fatalf("failed to accept friend request: %v", err)
+		}
 	}
 
 	convID := PrivateConvID(user1PublicID, user2PublicID)
@@ -597,9 +603,17 @@ func TestHandler_BlockUser(t *testing.T) {
 
 	token1 := generateToken(handler, user1)
 
-	_, _, err = svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
+	reqID, _, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
+	}
+
+	t.Logf("SendFriendRequest: reqID=%d", reqID)
+
+	if reqID > 0 {
+		if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+			t.Fatalf("failed to accept friend request: %v", err)
+		}
 	}
 
 	w := httptest.NewRecorder()
@@ -639,9 +653,17 @@ func TestHandler_RecallMessage(t *testing.T) {
 		t.Fatalf("failed to get public ID: %v", err)
 	}
 
-	_, _, err = svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
+	reqID, _, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
+	}
+
+	t.Logf("SendFriendRequest: reqID=%d", reqID)
+
+	if reqID > 0 {
+		if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+			t.Fatalf("failed to accept friend request: %v", err)
+		}
 	}
 
 	convID := PrivateConvID(user1PublicID, user2PublicID)
@@ -712,6 +734,8 @@ func TestHandler_GetConversations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
 	}
+
+	t.Logf("SendFriendRequest: reqID=%d, autoAccepted=%v", reqID, autoAccepted)
 
 	if !autoAccepted {
 		if reqID == 0 {
