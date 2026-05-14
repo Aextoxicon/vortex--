@@ -38,7 +38,7 @@ func goSafe(fn func()) {
 	}()
 }
 
-const nanoIDAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+const nanoIDAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 func GenerateNanoID(size int) string {
 	if size <= 0 {
