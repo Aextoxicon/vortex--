@@ -170,14 +170,20 @@ func TestService_SendMessage(t *testing.T) {
 	convID := PrivateConvID(publicID1, publicID2)
 	content := "Hello, World!"
 
+	t.Logf("DEBUG: user1ID=%d, user2ID=%d, publicID1=%s, publicID2=%s, convID=%s", user1ID, user2ID, publicID1, publicID2, convID)
+
 	reqID, _, err := svc.SendFriendRequest(ctx, user1ID, user2ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
 	}
 
+	t.Logf("DEBUG: reqID=%d", reqID)
+
 	if err := svc.AcceptFriendRequest(ctx, reqID, user2ID); err != nil {
 		t.Fatalf("failed to accept friend request: %v", err)
 	}
+
+	t.Logf("DEBUG: user1.ID=%d, user1.PublicID=%s", user1.ID, user1.PublicID)
 
 	result, err := svc.SendMessage(ctx, user1, convID, content, "")
 	if err != nil {
@@ -304,9 +310,13 @@ func TestService_SendMessage_Idempotency(t *testing.T) {
 	content := "Hello"
 	clientMsgID := "client_msg_123"
 
-	_, _, err = svc.SendFriendRequest(ctx, user1ID, user2ID, "")
+	reqID, _, err := svc.SendFriendRequest(ctx, user1ID, user2ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
+	}
+
+	if err := svc.AcceptFriendRequest(ctx, reqID, user2ID); err != nil {
+		t.Fatalf("failed to accept friend request: %v", err)
 	}
 
 	// First send
