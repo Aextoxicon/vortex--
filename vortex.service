@@ -1,5 +1,5 @@
 [Unit]
-Description=Vortex Gin Web Application
+Description=Vortex is backend of collision
 Documentation=https://github.com/aextoxicon/vortex--
 After=network.target postgresql.service
 Wants=postgresql.service
@@ -10,40 +10,28 @@ User=vortex
 Group=vortex
 WorkingDirectory=/opt/vortex
 
-# 环境变量配置
+# 取消注释这一行
 EnvironmentFile=/etc/vortex/.env
 
-# 启动命令
 ExecStart=/opt/vortex/vortex
 ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
 
-# 重启策略
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
-# 资源限制
 LimitNOFILE=65536
 LimitNPROC=4096
 
-# 安全加固
 NoNewPrivileges=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/tmp
+ReadWritePaths=/tmp /opt/vortex
 PrivateTmp=true
 
-# 日志配置
 StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=vortex
-
-# 优雅关闭
-TimeoutStartSec=10
-TimeoutStopSec=10
-KillSignal=SIGINT
-KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target
