@@ -190,7 +190,7 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 			auth.POST("/groups/:id/leave", h.LeaveGroup)
 			auth.DELETE("/groups/:id/members/:memberPublicId", h.KickMember)
 
-			auth.POST("/friends/request/:targetPublicId", h.SendFriendRequest)
+			auth.POST("/friends/request/send/:targetPublicId", h.SendFriendRequest)
 			auth.GET("/friends/requests", h.GetFriendRequests)
 			auth.POST("/friends/request/:requestId/accept", h.AcceptFriendRequest)
 			auth.POST("/friends/request/:requestId/reject", h.RejectFriendRequest)
