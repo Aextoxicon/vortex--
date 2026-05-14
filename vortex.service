@@ -1,0 +1,49 @@
+[Unit]
+Description=Vortex Gin Web Application
+Documentation=https://github.com/aextoxicon/vortex--
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=vortex
+Group=vortex
+WorkingDirectory=/opt/vortex
+
+# 环境变量配置
+EnvironmentFile=/etc/vortex/.env
+
+# 启动命令
+ExecStart=/opt/vortex/vortex
+ExecReload=/bin/kill -HUP $MAINPID
+
+# 重启策略
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp
+PrivateTmp=true
+
+# 日志配置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vortex
+
+# 优雅关闭
+TimeoutStartSec=10
+TimeoutStopSec=10
+KillSignal=SIGINT
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
