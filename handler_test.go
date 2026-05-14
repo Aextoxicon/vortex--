@@ -322,7 +322,7 @@ func TestHandler_SendMessage(t *testing.T) {
 	}
 
 	if reqID > 0 {
-		if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+		if err := svc.AcceptFriendRequest(ctx, reqID, user2.ID); err != nil {
 			t.Fatalf("failed to accept friend request: %v", err)
 		}
 	}
@@ -611,7 +611,7 @@ func TestHandler_BlockUser(t *testing.T) {
 	t.Logf("SendFriendRequest: reqID=%d", reqID)
 
 	if reqID > 0 {
-		if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+		if err := svc.AcceptFriendRequest(ctx, reqID, user2.ID); err != nil {
 			t.Fatalf("failed to accept friend request: %v", err)
 		}
 	}
@@ -661,7 +661,7 @@ func TestHandler_RecallMessage(t *testing.T) {
 	t.Logf("SendFriendRequest: reqID=%d", reqID)
 
 	if reqID > 0 {
-		if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+		if err := svc.AcceptFriendRequest(ctx, reqID, user2.ID); err != nil {
 			t.Fatalf("failed to accept friend request: %v", err)
 		}
 	}
@@ -741,7 +741,7 @@ func TestHandler_GetConversations(t *testing.T) {
 		if reqID == 0 {
 			t.Fatal("expected non-zero request ID")
 		}
-		if err := svc.AcceptFriendRequest(ctx, user2.ID, reqID); err != nil {
+		if err := svc.AcceptFriendRequest(ctx, reqID, user2.ID); err != nil {
 			t.Fatalf("failed to accept friend request: %v", err)
 		}
 	}
