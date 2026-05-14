@@ -170,9 +170,13 @@ func TestService_SendMessage(t *testing.T) {
 	convID := PrivateConvID(publicID1, publicID2)
 	content := "Hello, World!"
 
-	_, _, err = svc.SendFriendRequest(ctx, user1ID, user2ID, "")
+	reqID, _, err := svc.SendFriendRequest(ctx, user1ID, user2ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
+	}
+
+	if err := svc.AcceptFriendRequest(ctx, reqID, user2ID); err != nil {
+		t.Fatalf("failed to accept friend request: %v", err)
 	}
 
 	result, err := svc.SendMessage(ctx, user1, convID, content, "")
