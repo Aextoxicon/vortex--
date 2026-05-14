@@ -46,9 +46,14 @@ func setupTestService(t *testing.T) (*Service, *sql.DB, *testutil.PostgresContai
 	idempotencyStore := &MessageIdempotencyStore{Store: store}
 
 	cfg := &Config{
-		NodeID:         1,
-		PublicIDLength: 12,
-		BCryptCost:     10,
+		NodeID:                               1,
+		PublicIDLength:                       12,
+		BCryptCost:                           10,
+		MessageRecallWindowMs:                120000,
+		WorkerTableCreateIntervalHours:       24,
+		WorkerMaintenanceInitialDelayMinutes: 1,
+		WorkerMaintenanceIntervalHours:       24,
+		MessageRetentionDays:                 7,
 	}
 
 	idGen := NewIdGenerator(cfg, idGenStateStore, msgStore, cfg.NodeID)

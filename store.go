@@ -1237,7 +1237,7 @@ func (s *ConversationParticipantStore) GetConversationList(ctx context.Context, 
 			lm.is_recalled
 		FROM user_conversations uc
 		LEFT JOIN last_messages lm ON uc.conv_id = lm.conv_id
-		ORDER BY lm.last_msg_ts DESC NULLS LAST
+		ORDER BY lm.ts DESC NULLS LAST
 		LIMIT $2 OFFSET $3
 	`
 
