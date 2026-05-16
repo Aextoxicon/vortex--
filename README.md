@@ -1,3 +1,9 @@
+# Vortex
+
+即使是仓库名字是vortex--，因为以前rust版本仓库叫vortex给我占用了
+
+## 项目结构
+
 ```
 vortex/
 ├── main.go              # 应用入口：启动服务、初始化、路由注册
@@ -19,3 +25,217 @@ vortex/
     └── testutil/
         └── postgres.go  # 测试数据库连接工具
 ```
+
+## 快速开始
+
+### 环境要求
+
+- Go 1.21+
+- PostgreSQL 16+
+- Docker (可选，用于测试)
+- s3服务
+
+### 安装
+
+```bash
+git clone https://github.com/vortex--/vortex.git
+cd vortex
+go mod tidy
+go build
+mkdir /opt/vortex/
+mv vortex /opt/vortex/
+#然后把其他的东西按需配置，运行
+```
+
+### 配置
+
+```bash
+cp .env.example .env
+# 编辑 .env 文件，设置必要的环境变量
+```
+
+生成 JWT 密钥：
+
+```bash
+openssl rand -base64 32
+```
+
+### 测试
+
+```bash
+# 单元测试
+make test-unit
+
+# 集成测试 (需要 Docker)
+make test-integration
+
+# 所有测试
+make test-all
+```
+
+## API 快速参考
+
+**认证**: `Authorization: Bearer <token>`
+
+### 端点速查表
+
+#### 认证 (Auth)
+
+| 方法 | 端点 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/api/auth/register` | 否 | 注册新用户 |
+| POST | `/api/auth/login` | 否 | 登录获取Token |
+| GET | `/api/auth/me` | 是 | 获取当前用户 |
+| POST | `/api/auth/logout` | 是 | 登出 |
+| PUT | `/api/auth/:publicId` | 是 | 更新用户信息 |
+| DELETE | `/api/auth/:publicId` | 是 | 删除用户 |
+
+#### 消息 (Messages)
+
+| 方法 | 端点 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/api/messages/send` | 是 | 发送消息 |
+| GET | `/api/messages` | 是 | 获取消息列表 |
+| POST | `/api/messages/recall/:msgId` | 是 | 撤回消息 |
+| GET | `/api/check` | 是 | 检查新消息 |
+| GET | `/api/conversations` | 是 | 获取会话列表 |
+
+#### 好友 (Friends)
+
+| 方法 | 端点 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/api/friends/request/send/:targetPublicId` | 是 | 发送好友请求 |
+| GET | `/api/friends/requests` | 是 | 获取好友请求 |
+| POST | `/api/friends/request/:requestId/accept` | 是 | 接受请求 |
+| POST | `/api/friends/request/:requestId/reject` | 是 | 拒绝请求 |
+| DELETE | `/api/friends/request/:requestId` | 是 | 取消请求 |
+| POST | `/api/blocks/:targetPublicId` | 是 | 拉黑用户 |
+| DELETE | `/api/blocks/:targetPublicId` | 是 | 取消拉黑 |
+
+#### 群组 (Groups)
+
+| 方法 | 端点 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/api/groups` | 是 | 创建群组 |
+| GET | `/api/groups/:id` | 是 | 获取群组信息 |
+| PUT | `/api/groups/:id` | 是 | 更新群组 |
+| DELETE | `/api/groups/:id` | 是 | 删除群组 |
+| POST | `/api/groups/:id/join` | 是 | 加入群组 |
+| POST | `/api/groups/:id/leave` | 是 | 退出群组 |
+| DELETE | `/api/groups/:id/members/:memberPublicId` | 是 | 踢出成员 |
+
+#### 文件 (Files)
+
+| 方法 | 端点 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/api/files/presign` | 是 | 获取预签名URL |
+
+#### 健康检查 (Health)
+
+| 方法 | 端点 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/health` | 否 | 健康检查 |
+| GET | `/ready` | 否 | 就绪检查 |
+
+### 请求示例
+
+注册：
+```bash
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"johndoe","password":"SecurePass123!","email":"john@example.com"}'
+```
+
+登录：
+```bash
+curl -X POST http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"johndoe","password":"SecurePass123!"}'
+```
+
+发送消息：
+```bash
+curl -X POST http://localhost:8080/api/messages/send \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"conv_id":"conv_abc123","content":"Hello!"}'
+```
+
+获取消息：
+```bash
+curl -X GET "http://localhost:8080/api/messages?conv_id=conv_abc123&page=1&page_size=100" \
+  -H "Authorization: Bearer <token>"
+```
+
+发送好友请求：
+```bash
+curl -X POST http://localhost:8080/api/friends/request/send/def456UVW \
+  -H "Authorization: Bearer <token>"
+```
+
+创建群组：
+```bash
+curl -X POST http://localhost:8080/api/groups \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"My Group","description":"A group for friends"}'
+```
+
+### 错误码
+
+| 状态码 | 错误 | 说明 |
+|--------|------|------|
+| 400 | invalid_input | 请求参数无效 |
+| 401 | unauthorized | 未授权 |
+| 403 | forbidden | 无权限 |
+| 404 | not_found | 资源不存在 |
+| 409 | conflict | 资源冲突 |
+| 429 | rate_limit_exceeded | 请求过于频繁 |
+| 500 | internal_error | 服务器错误 |
+| 503 | service_unavailable | 服务不可用 |
+
+### 限流策略
+
+| 端点 | 限制 |
+|------|------|
+| `/api/auth/login` | 5次失败/15分钟 |
+| `/api/messages/send` | 1次/秒 |
+| `/api/check` | 1次/3秒 |
+
+### 数据验证
+
+| 字段 | 规则 |
+|------|------|
+| username | 3-20字符，字母数字下划线 |
+| password | 8-72字符，含大小写+数字+特殊字符 |
+| email | 标准邮箱格式 |
+| group name | 1-50字符 |
+| message | 最大1000字符 |
+
+## 部署
+
+### Systemd
+
+```bash
+sudo cp vortex.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable vortex
+sudo systemctl start vortex
+```
+
+### Docker
+
+```bash
+docker build -t vortex .
+docker run -p 8080:8080 --env-file .env vortex
+```
+
+## 文档
+
+- [API.md](API.md) - 完整API文档
+- [openapi.yaml](openapi.yaml) - OpenAPI 3.0规范
+- [postman_collection.json](postman_collection.json) - Postman集合
+
+## License
+
+MIT

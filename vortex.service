@@ -13,12 +13,16 @@ EnvironmentFile=/etc/vortex/.env
 
 ExecStart=/opt/vortex/vortex
 ExecReload=/bin/kill -HUP $MAINPID
-KillMode=mixed
 
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=60
 StartLimitBurst=5
+
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillSignal=SIGINT
+KillMode=mixed
 
 LimitNOFILE=65536
 LimitNPROC=4096
@@ -26,10 +30,11 @@ LimitNPROC=4096
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/tmp /opt/vortex
 PrivateTmp=true
 
 StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vortex
 
 [Install]
 WantedBy=multi-user.target
