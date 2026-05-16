@@ -2,7 +2,7 @@
 
 即使是仓库名字是vortex--，因为以前rust版本仓库叫vortex给我占用了
 
-## 项目结构
+# 项目结构
 
 ```
 vortex/
@@ -26,16 +26,16 @@ vortex/
         └── postgres.go  # 测试数据库连接工具
 ```
 
-## 快速开始
+# 快速开始
 
-### 环境要求
+# 环境要求
 
 - Go 1.21+
 - PostgreSQL 16+
 - Docker (可选，用于测试)
 - s3服务
 
-### 安装
+# 安装
 
 ```bash
 git clone https://github.com/vortex--/vortex.git
@@ -47,7 +47,7 @@ mv vortex /opt/vortex/
 #然后把其他的东西按需配置，运行
 ```
 
-### 配置
+# 配置
 
 ```bash
 cp .env.example .env
@@ -60,7 +60,7 @@ cp .env.example .env
 openssl rand -base64 32
 ```
 
-### 测试
+# 测试
 
 ```bash
 # 单元测试
@@ -73,13 +73,13 @@ make test-integration
 make test-all
 ```
 
-## API 快速参考
+# API 快速参考
 
 **认证**: `Authorization: Bearer <token>`
 
-### 端点速查表
+# 端点速查表
 
-#### 认证 (Auth)
+# 认证 (Auth)
 
 | 方法 | 端点 | 认证 | 说明 |
 |------|------|------|------|
@@ -90,7 +90,7 @@ make test-all
 | PUT | `/api/auth/:publicId` | 是 | 更新用户信息 |
 | DELETE | `/api/auth/:publicId` | 是 | 删除用户 |
 
-#### 消息 (Messages)
+# 消息 (Messages)
 
 | 方法 | 端点 | 认证 | 说明 |
 |------|------|------|------|
@@ -100,7 +100,7 @@ make test-all
 | GET | `/api/check` | 是 | 检查新消息 |
 | GET | `/api/conversations` | 是 | 获取会话列表 |
 
-#### 好友 (Friends)
+# 好友 (Friends)
 
 | 方法 | 端点 | 认证 | 说明 |
 |------|------|------|------|
@@ -112,7 +112,7 @@ make test-all
 | POST | `/api/blocks/:targetPublicId` | 是 | 拉黑用户 |
 | DELETE | `/api/blocks/:targetPublicId` | 是 | 取消拉黑 |
 
-#### 群组 (Groups)
+# 群组 (Groups)
 
 | 方法 | 端点 | 认证 | 说明 |
 |------|------|------|------|
@@ -124,20 +124,20 @@ make test-all
 | POST | `/api/groups/:id/leave` | 是 | 退出群组 |
 | DELETE | `/api/groups/:id/members/:memberPublicId` | 是 | 踢出成员 |
 
-#### 文件 (Files)
+# 文件 (Files)
 
 | 方法 | 端点 | 认证 | 说明 |
 |------|------|------|------|
 | POST | `/api/files/presign` | 是 | 获取预签名URL |
 
-#### 健康检查 (Health)
+# 健康检查 (Health)
 
 | 方法 | 端点 | 认证 | 说明 |
 |------|------|------|------|
 | GET | `/health` | 否 | 健康检查 |
 | GET | `/ready` | 否 | 就绪检查 |
 
-### 请求示例
+# 请求示例
 
 注册：
 ```bash
@@ -181,7 +181,7 @@ curl -X POST http://localhost:8080/api/groups \
   -d '{"name":"My Group","description":"A group for friends"}'
 ```
 
-### 错误码
+# 错误码
 
 | 状态码 | 错误 | 说明 |
 |--------|------|------|
@@ -194,7 +194,7 @@ curl -X POST http://localhost:8080/api/groups \
 | 500 | internal_error | 服务器错误 |
 | 503 | service_unavailable | 服务不可用 |
 
-### 限流策略
+# 限流策略
 
 | 端点 | 限制 |
 |------|------|
@@ -202,7 +202,7 @@ curl -X POST http://localhost:8080/api/groups \
 | `/api/messages/send` | 1次/秒 |
 | `/api/check` | 1次/3秒 |
 
-### 数据验证
+# 数据验证
 
 | 字段 | 规则 |
 |------|------|
@@ -212,9 +212,9 @@ curl -X POST http://localhost:8080/api/groups \
 | group name | 1-50字符 |
 | message | 最大1000字符 |
 
-## 部署
+# 部署
 
-### Systemd
+# Systemd
 
 ```bash
 sudo cp vortex.service /etc/systemd/system/
@@ -223,19 +223,19 @@ sudo systemctl enable vortex
 sudo systemctl start vortex
 ```
 
-### Docker
+# Docker
 
 ```bash
 docker build -t vortex .
 docker run -p 8080:8080 --env-file .env vortex
 ```
 
-## 文档
+# 文档
 
 - [API.md](API.md) - 完整API文档
 - [openapi.yaml](openapi.yaml) - OpenAPI 3.0规范
 - [postman_collection.json](postman_collection.json) - Postman集合
 
-## License
+# License
 
 MIT
