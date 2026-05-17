@@ -428,23 +428,74 @@ GET /api/conversations
 
 **认证**: 需要 Bearer Token
 
+**查询参数**
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| limit | int | 否 | 20 | 每页数量（最大100） |
+| offset | int | 否 | 0 | 偏移量 |
+
 **响应 200 OK**
 ```json
 {
   "conversations": [
     {
-      "conv_id": "conv_abc123",
+      "conv_id": "p_xxx_yyy",
       "type": "private",
-      "name": "John Doe",
+      "name": "张三",
+      "public_id": "abc123",
+      "username": "zhangsan",
       "last_message": {
+        "msg_id": 123,
         "content": "Hello!",
-        "created_at": "2026-05-14T12:00:00Z"
+        "from_uid": 456,
+        "ts": 1715673600000,
+        "is_recalled": false
+      },
+      "unread_count": 0
+    },
+    {
+      "conv_id": "g_xxx",
+      "type": "group",
+      "name": "项目群",
+      "group_id": "g_xxx",
+      "member_count": 5,
+      "last_message": {
+        "msg_id": 456,
+        "content": "大家好",
+        "from_uid": 789,
+        "ts": 1715673600000,
+        "is_recalled": false
       },
       "unread_count": 3
     }
-  ]
+  ],
+  "total": 2
 }
 ```
+
+**字段说明**
+
+私聊会话 (`type: "private"`)：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| conv_id | string | 私聊会话ID，格式 `p_{publicId1}_{publicId2}` |
+| type | string | 会话类型：private |
+| name | string | 对方用户名 |
+| public_id | string | 对方Public ID |
+| username | string | 对方用户名 |
+| last_message | object | 最后一条消息 |
+| unread_count | int | 未读消息数 |
+
+群组会话 (`type: "group"`)：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| conv_id | string | 群组会话ID，格式 `g_{groupId}` |
+| type | string | 会话类型：group |
+| name | string | 群组名称 |
+| group_id | string | 群组ID |
+| member_count | int | 群组成员数 |
+| last_message | object | 最后一条消息 |
+| unread_count | int | 未读消息数 |
 
 ---
 

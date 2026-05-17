@@ -602,21 +602,13 @@ type ConversationListResponse struct {
 type ConversationItem struct {
 	ConvID      string           `json:"conv_id"`
 	Type        string           `json:"type"`
-	TargetUser  *UserInfoSimple  `json:"target_user,omitempty"`
-	GroupInfo   *GroupInfoSimple `json:"group_info,omitempty"`
+	Name        string           `json:"name"`
+	PublicID    string           `json:"public_id,omitempty"`
+	Username    string           `json:"username,omitempty"`
+	GroupID     string           `json:"group_id,omitempty"`
+	MemberCount int              `json:"member_count,omitempty"`
 	LastMessage *LastMessageInfo `json:"last_message,omitempty"`
-}
-
-type UserInfoSimple struct {
-	PublicID string  `json:"public_id"`
-	Username string  `json:"username"`
-	Avatar   *string `json:"avatar"`
-}
-
-type GroupInfoSimple struct {
-	GroupID     string `json:"group_id"`
-	Name        string `json:"name"`
-	MemberCount int    `json:"member_count"`
+	UnreadCount int              `json:"unread_count"`
 }
 
 type LastMessageInfo struct {
@@ -646,11 +638,9 @@ func (s *Service) GetConversationList(ctx context.Context, userID int64, limit, 
 				return nil, err
 			}
 			if targetUser != nil {
-				conv.TargetUser = &UserInfoSimple{
-					PublicID: targetUser.PublicID,
-					Username: targetUser.Username,
-					Avatar:   nil,
-				}
+				conv.Name = targetUser.Username
+				conv.PublicID = targetUser.PublicID
+				conv.Username = targetUser.Username
 			}
 		} else if item.Type == "group" && item.GroupID != nil {
 			group, err := s.GetGroupByID(ctx, *item.GroupID)
@@ -662,11 +652,9 @@ func (s *Service) GetConversationList(ctx context.Context, userID int64, limit, 
 				if err != nil {
 					return nil, err
 				}
-				conv.GroupInfo = &GroupInfoSimple{
-					GroupID:     group.GroupID,
-					Name:        group.Name,
-					MemberCount: memberCount,
-				}
+				conv.Name = group.Name
+				conv.GroupID = group.GroupID
+				conv.MemberCount = memberCount
 			}
 		}
 
