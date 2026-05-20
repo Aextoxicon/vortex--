@@ -743,13 +743,10 @@ POST /api/groups
 **响应 201 Created**
 ```json
 {
-  "group": {
-    "id": "grp_abc123",
-    "name": "My Group",
-    "description": "A group for friends",
-    "owner_id": "abc123XYZ",
-    "created_at": "2026-05-14T12:00:00Z"
-  }
+  "group_id": "g_abc123XYZ",
+  "name": "My Group",
+  "description": "A group for friends",
+  "owner_public_id": "abc123XYZ"
 }
 ```
 
@@ -774,20 +771,18 @@ GET /api/groups/:id
 **响应 200 OK**
 ```json
 {
-  "group": {
-    "id": "grp_abc123",
-    "name": "My Group",
-    "description": "A group for friends",
-    "owner_id": "abc123XYZ",
-    "members": [
-      {
-        "public_id": "abc123XYZ",
-        "username": "johndoe",
-        "role": "owner"
-      }
-    ],
-    "created_at": "2026-05-14T12:00:00Z"
-  }
+  "group_id": "g_abc123XYZ",
+  "name": "My Group",
+  "description": "A group for friends",
+  "owner_id": 123456,
+  "members": [
+    {
+      "public_id": "abc123XYZ",
+      "username": "johndoe",
+      "role": "owner"
+    }
+  ],
+  "created_at": "2026-05-14T12:00:00Z"
 }
 ```
 
