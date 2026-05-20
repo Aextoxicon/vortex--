@@ -8,6 +8,7 @@ import requests
 import json
 import time
 from typing import Dict, List, Optional
+from datetime import datetime
 
 # 配置
 BASE_URL = "http://localhost:8080"
@@ -133,27 +134,39 @@ class VortexTester:
             print(f"❌ 接受好友请求时出错: {e}")
             return False
 
-    def send_message(self, token: str, conv_id: str, content: str) -> Optional[Dict]:
-        """发送消息"""
+    def send_message(self, token: str, conv_id: str, content: str, retry: int = 3) -> Optional[Dict]:
+        """发送消息（带重试）"""
         url = f"{self.base_url}/api/messages/send"
         headers = {"Authorization": f"Bearer {token}"}
         data = {
             "conv_id": conv_id,
             "content": content
         }
-        try:
-            response = requests.post(url, json=data, headers=headers)
-            if response.status_code == 201:
-                result = response.json()
-                msg_id = result.get('message', {}).get('id')
-                print(f"✅ 发送消息成功 (msg_id: {msg_id})")
-                return result
-            else:
-                print(f"❌ 发送消息失败：{response.status_code} - {response.text}")
-                return None
-        except Exception as e:
-            print(f"❌ 发送消息时出错：{e}")
-            return None
+        
+        for attempt in range(retry):
+            try:
+                response = requests.post(url, json=data, headers=headers)
+                if response.status_code == 201:
+                    result = response.json()
+                    msg_id = result.get('message', {}).get('id')
+                    print(f"✅ 发送消息成功 (msg_id: {msg_id})")
+                    return result
+                elif response.status_code == 500 and attempt < retry - 1:
+                    # 数据库错误，等待后重试
+                    print(f"⚠️  发送消息失败，重试 {attempt + 1}/{retry}: 500 - {response.text}")
+                    time.sleep(1)
+                else:
+                    print(f"❌ 发送消息失败：{response.status_code} - {response.text}")
+                    return None
+            except Exception as e:
+                if attempt < retry - 1:
+                    print(f"⚠️  发送消息异常，重试 {attempt + 1}/{retry}: {e}")
+                    time.sleep(1)
+                else:
+                    print(f"❌ 发送消息时出错：{e}")
+                    return None
+        
+        return None
 
     def create_group(self, token: str, name: str, description: str = "") -> Optional[Dict]:
         """创建群组"""
@@ -239,13 +252,36 @@ class VortexTester:
             return f"p_{public_id1}_{public_id2}"
         return f"p_{public_id2}_{public_id1}"
 
+    def create_message_table_if_needed(self) -> bool:
+        """确保消息表存在（等待 worker 创建）"""
+        print("\n检查服务器状态...")
+        try:
+            response = requests.get(f"{self.base_url}/health")
+            if response.status_code == 200:
+                print("✅ 服务器运行正常")
+                # Worker 启动时会自动创建消息表，等待一下
+                print("等待 Worker 创建消息表...")
+                time.sleep(3)
+                return True
+            else:
+                print(f"❌ 健康检查失败：{response.status_code}")
+                return False
+        except Exception as e:
+            print(f"❌ 无法连接到服务器：{e}")
+            print("请确保服务器在运行")
+            return False
+
     def setup(self):
         """设置测试环境"""
         print("\n" + "="*60)
         print("开始设置测试数据...")
         print("="*60)
 
-        # 1. 注册用户
+        # 0. 检查服务器和消息表
+        print("\n--- 0. 检查服务器状态 ---")
+        if not self.create_message_table_if_needed():
+            print("\n❌ 服务器未运行或消息表未创建，退出")
+            return
         print("\n--- 1. 注册测试用户 ---")
         for user_data in TEST_USERS:
             result = self.register_user(user_data["username"], user_data["email"], PASSWORD)
