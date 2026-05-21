@@ -163,7 +163,6 @@ func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifTy
 	}
 
 	ts := time.Now().UnixMilli() - s.cfg.EpochTime
-	tableName := MessageTableNameByTs(ts)
 
 	msg := &Message{
 		MsgID:   msgID,
@@ -173,7 +172,7 @@ func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifTy
 		Ts:      ts,
 	}
 
-	_, err = s.msgStore.InsertMessage(ctx, tableName, msg)
+	_, err = s.msgStore.InsertMessage(ctx, msg)
 	if err != nil {
 		return 0, err
 	}
@@ -188,7 +187,6 @@ func (s *Service) sendSystemMessageTx(tx *sql.Tx, convID string, content []byte)
 	}
 
 	ts := time.Now().UnixMilli() - s.cfg.EpochTime
-	tableName := MessageTableNameByTs(ts)
 
 	msg := &Message{
 		MsgID:   msgID,
@@ -198,7 +196,7 @@ func (s *Service) sendSystemMessageTx(tx *sql.Tx, convID string, content []byte)
 		Ts:      ts,
 	}
 
-	_, err = s.msgStore.InsertMessageTx(tx, tableName, msg)
+	_, err = s.msgStore.InsertMessageTx(tx, msg)
 	if err != nil {
 		return 0, err
 	}

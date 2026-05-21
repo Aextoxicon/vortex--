@@ -67,13 +67,13 @@ func setupTestService(t *testing.T) (*Service, *sql.DB, *testutil.PostgresContai
 		nil,
 	)
 
-	// 创建当前日期和下周的消息表
+	// 创建当前日期和下周的消息分区
 	now := time.Now().UTC()
 	for offset := 0; offset < 8; offset++ {
 		date := now.AddDate(0, 0, offset)
 		tableName := MessageTableNameByDate(date)
-		if _, err := msgStore.CreateMessageTable(tableName); err != nil {
-			t.Fatalf("failed to create message table %s: %v", tableName, err)
+		if err := msgStore.EnsurePartition(tableName); err != nil {
+			t.Fatalf("failed to create message partition %s: %v", tableName, err)
 		}
 	}
 

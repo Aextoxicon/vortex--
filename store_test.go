@@ -195,17 +195,13 @@ func TestUserStore_Update(t *testing.T) {
 	}
 }
 
-func TestMessageStore_CreateMessageTable(t *testing.T) {
+func TestMessageStore_EnsurePartition(t *testing.T) {
 	store, _, _ := setupTestStore(t)
 	msgStore := &MessageStore{Store: store}
 
-	tableName, err := msgStore.CreateMessageTable("messages_20260101")
+	err := msgStore.EnsurePartition("messages_20260101")
 	if err != nil {
-		t.Fatalf("failed to create message table: %v", err)
-	}
-
-	if tableName != 1 {
-		t.Error("expected table creation to succeed")
+		t.Fatalf("failed to create message partition: %v", err)
 	}
 }
 
@@ -215,9 +211,9 @@ func TestMessageStore_InsertMessage(t *testing.T) {
 	ctx := context.Background()
 
 	tableName := MessageTableNameByDate(time.Now())
-	_, err := msgStore.CreateMessageTable(tableName)
+	err := msgStore.EnsurePartition(tableName)
 	if err != nil {
-		t.Fatalf("failed to create message table: %v", err)
+		t.Fatalf("failed to create message partition: %v", err)
 	}
 
 	now := time.Now().UnixMilli()
@@ -230,7 +226,7 @@ func TestMessageStore_InsertMessage(t *testing.T) {
 		IsRecalled: 0,
 	}
 
-	msgID, err := msgStore.InsertMessage(ctx, tableName, msg)
+	msgID, err := msgStore.InsertMessage(ctx, msg)
 	if err != nil {
 		t.Fatalf("failed to insert message: %v", err)
 	}
@@ -246,14 +242,14 @@ func TestMessageStore_GetConversationMessages(t *testing.T) {
 	ctx := context.Background()
 
 	tableName := MessageTableNameByDate(time.Now())
-	_, err := msgStore.CreateMessageTable(tableName)
+	err := msgStore.EnsurePartition(tableName)
 	if err != nil {
-		t.Fatalf("failed to create message table: %v", err)
+		t.Fatalf("failed to create message partition: %v", err)
 	}
 
 	now := time.Now().UnixMilli()
 	for i := 0; i < 5; i++ {
-		_, err := msgStore.InsertMessage(ctx, tableName, &Message{
+		_, err := msgStore.InsertMessage(ctx, &Message{
 			MsgID:      time.Now().UnixNano() + int64(i),
 			ConvID:     "conv_456",
 			FromUID:    1,
@@ -266,7 +262,7 @@ func TestMessageStore_GetConversationMessages(t *testing.T) {
 		}
 	}
 
-	messages, err := msgStore.GetConversationMessages(ctx, tableName, "conv_456", 10, 0)
+	messages, err := msgStore.GetConversationMessages(ctx, "conv_456", 10, 0)
 	if err != nil {
 		t.Fatalf("failed to get messages: %v", err)
 	}

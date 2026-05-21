@@ -330,9 +330,9 @@ func TestHandler_SendMessage(t *testing.T) {
 	convID := PrivateConvID(user1PublicID, user2PublicID)
 
 	tableName := MessageTableNameByTs(time.Now().UnixMilli())
-	_, err = svc.msgStore.CreateMessageTable(tableName)
+	err = svc.msgStore.EnsurePartition(tableName)
 	if err != nil {
-		t.Fatalf("failed to create message table: %v", err)
+		t.Fatalf("failed to create message partition: %v", err)
 	}
 
 	token := generateToken(handler, user1)
@@ -669,9 +669,9 @@ func TestHandler_RecallMessage(t *testing.T) {
 	convID := PrivateConvID(user1PublicID, user2PublicID)
 
 	tableName := MessageTableNameByTs(time.Now().UnixMilli())
-	_, err = svc.msgStore.CreateMessageTable(tableName)
+	err = svc.msgStore.EnsurePartition(tableName)
 	if err != nil {
-		t.Fatalf("failed to create message table: %v", err)
+		t.Fatalf("failed to create message partition: %v", err)
 	}
 
 	result, err := svc.SendMessage(ctx, user1, convID, "Hello", "")
@@ -749,7 +749,7 @@ func TestHandler_GetConversations(t *testing.T) {
 	convID := PrivateConvID(user1PublicID, user2PublicID)
 
 	tableName := MessageTableNameByTs(time.Now().UnixMilli())
-	_, err = svc.msgStore.CreateMessageTable(tableName)
+	err = svc.msgStore.EnsurePartition(tableName)
 	if err != nil {
 		t.Fatalf("failed to create message table: %v", err)
 	}

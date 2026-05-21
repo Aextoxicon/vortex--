@@ -93,7 +93,7 @@ func (w *Worker) createTablesFromTodayToSunday() {
 	for offset := 0; offset <= daysToSunday; offset++ {
 		date := now.AddDate(0, 0, offset)
 		tableName := MessageTableNameByDate(date)
-		if _, err := w.msgStore.CreateMessageTable(tableName); err != nil {
+		if err := w.msgStore.EnsurePartition(tableName); err != nil {
 			slog.Error("failed to create table", "table", tableName, "error", err)
 		}
 	}
@@ -111,7 +111,7 @@ func (w *Worker) createWeekTables() {
 	for offset := 0; offset < 7; offset++ {
 		date := nextMonday.AddDate(0, 0, offset)
 		tableName := MessageTableNameByDate(date)
-		if _, err := w.msgStore.CreateMessageTable(tableName); err != nil {
+		if err := w.msgStore.EnsurePartition(tableName); err != nil {
 			slog.Error("failed to create table", "table", tableName, "error", err)
 		}
 	}
@@ -213,4 +213,13 @@ func (w *Worker) dropExpiredPartitions() {
 		}
 	}
 	slog.Info("maintenance: drop expired partitions completed")
+}
+
+func MessageTableNameByDate(date time.Time) string {
+	return fmt.Sprintf("messages_%s", date.Format("20060102"))
+}
+
+func MessageTableNameByTs(ts int64) string {
+	t := time.UnixMilli(ts)
+	return MessageTableNameByDate(t)
 }

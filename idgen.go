@@ -86,19 +86,13 @@ func (g *IdGenerator) initFromDB() error {
 	}
 
 	now := time.Now().UnixMilli()
-	maxIDs, err := g.msgSt.GetMaxMessageIDsFromRecentTables(7)
+	maxID, err := g.msgSt.GetMaxMessageID()
 	if err != nil {
-		return fmt.Errorf("load max ids: %w", err)
+		return fmt.Errorf("load max id: %w", err)
 	}
 
 	startTs := now
-	if len(maxIDs) > 0 {
-		maxID := maxIDs[0]
-		for _, id := range maxIDs[1:] {
-			if id > maxID {
-				maxID = id
-			}
-		}
+	if maxID > 0 {
 		existingTs := maxID >> vfTimestampShift
 		if existingTs+1 > startTs {
 			startTs = existingTs + 1

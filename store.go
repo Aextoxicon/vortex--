@@ -316,82 +316,27 @@ func (s *UserStore) EmailExists(ctx context.Context, email string) (bool, error)
 // Uses Postgres declarative partitioning on ts (milliseconds).
 // The parent partitioned table "messages" is created once.
 // Daily partitions "messages_YYYYMMDD" are created as partition children.
-// CRUD queries go to the specific partition (e.g. messages_20260505)
-// for optimal performance without partition pruning overhead.
+// CRUD queries go directly to the parent "messages" table;
+// PostgreSQL automatically routes to the correct partition.
 
 type MessageStore struct {
 	*Store
 }
 
-func (s *MessageStore) tableName(from string) string {
-	if s.IsValidTableName(from) {
-		return from
-	}
-	return "messages"
-}
-
-// setupParentTable ensures the partitioned parent exists
-func (s *MessageStore) setupParentTable() error {
-	sql := `
-		CREATE TABLE IF NOT EXISTS messages (
-			msg_id BIGINT NOT NULL,
-			conv_id TEXT NOT NULL,
-			from_uid BIGINT NOT NULL,
-			content TEXT NOT NULL,
-			ts BIGINT NOT NULL,
-			is_recalled INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (msg_id, ts)
-		) PARTITION BY RANGE (ts)`
-	_, err := s.db.Exec(sql)
-	return err
-}
-
-func (s *MessageStore) IsValidTableName(tableName string) bool {
-	if len(tableName) != 17 {
-		return false
-	}
-	if tableName[:9] != "messages_" {
-		return false
-	}
-	_, err := time.Parse("20060102", tableName[9:])
-	return err == nil
-}
-
-func (s *MessageStore) quoteTableName(tableName string) (string, error) {
-	tbl := s.tableName(tableName)
-	if !s.IsValidTableName(tbl) {
-		return "", fmt.Errorf("invalid table name: %s", tbl)
-	}
-	var quoted string
-	err := s.db.QueryRow("SELECT quote_ident($1)", tbl).Scan(&quoted)
-	if err != nil {
-		return "", fmt.Errorf("quote table name failed: %w", err)
-	}
-	return quoted, nil
-}
-
-func (s *MessageStore) GetMessage(ctx context.Context, tableName string, msgID int64) (*Message, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return nil, err
-	}
-	row := s.db.QueryRowContext(ctx, fmt.Sprintf(`
+func (s *MessageStore) GetMessage(ctx context.Context, msgID int64) (*Message, error) {
+	row := s.db.QueryRowContext(ctx, `
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
-		FROM %s WHERE msg_id = $1`, quoted), msgID)
+		FROM messages WHERE msg_id = $1`, msgID)
 	return scanMessage(row)
 }
 
-func (s *MessageStore) GetConversationMessages(ctx context.Context, tableName string, convID string, limit, offset int) ([]*Message, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+func (s *MessageStore) GetConversationMessages(ctx context.Context, convID string, limit, offset int) ([]*Message, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
-		FROM %s
+		FROM messages
 		WHERE conv_id = $1
 		ORDER BY ts DESC
-		LIMIT $2 OFFSET $3`, quoted), convID, limit, offset)
+		LIMIT $2 OFFSET $3`, convID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -399,17 +344,13 @@ func (s *MessageStore) GetConversationMessages(ctx context.Context, tableName st
 	return scanMessages(rows)
 }
 
-func (s *MessageStore) GetMessagesByUser(ctx context.Context, tableName string, userID int64, limit, offset int) ([]*Message, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+func (s *MessageStore) GetMessagesByUser(ctx context.Context, userID int64, limit, offset int) ([]*Message, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
-		FROM %s
+		FROM messages
 		WHERE from_uid = $1
 		ORDER BY ts DESC
-		LIMIT $2 OFFSET $3`, quoted), userID, limit, offset)
+		LIMIT $2 OFFSET $3`, userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -417,46 +358,33 @@ func (s *MessageStore) GetMessagesByUser(ctx context.Context, tableName string, 
 	return scanMessages(rows)
 }
 
-func (s *MessageStore) InsertMessage(ctx context.Context, tableName string, msg *Message) (int64, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return 0, err
-	}
-	err = s.db.QueryRowContext(ctx, fmt.Sprintf(`
-		INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled)
+func (s *MessageStore) InsertMessage(ctx context.Context, msg *Message) (int64, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO messages (msg_id, conv_id, from_uid, content, ts, is_recalled)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING msg_id`, quoted),
+		RETURNING msg_id`,
 		msg.MsgID, msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled,
 	).Scan(&msg.MsgID)
 	return msg.MsgID, err
 }
 
-func (s *MessageStore) InsertMessageTx(tx *sql.Tx, tableName string, msg *Message) (int64, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return 0, err
-	}
-	err = tx.QueryRow(fmt.Sprintf(`
-		INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled)
+func (s *MessageStore) InsertMessageTx(tx *sql.Tx, msg *Message) (int64, error) {
+	err := tx.QueryRow(`
+		INSERT INTO messages (msg_id, conv_id, from_uid, content, ts, is_recalled)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING msg_id`, quoted),
+		RETURNING msg_id`,
 		msg.MsgID, msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled,
 	).Scan(&msg.MsgID)
 	return msg.MsgID, err
 }
 
-func (s *MessageStore) InsertMessagesBatch(ctx context.Context, tableName string, msgs []*Message) (int64, error) {
+func (s *MessageStore) InsertMessagesBatch(ctx context.Context, msgs []*Message) (int64, error) {
 	if len(msgs) == 0 {
 		return 0, nil
 	}
 
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return 0, err
-	}
-
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("INSERT INTO %s (msg_id, conv_id, from_uid, content, ts, is_recalled) VALUES ", quoted))
+	sb.WriteString("INSERT INTO messages (msg_id, conv_id, from_uid, content, ts, is_recalled) VALUES ")
 
 	args := make([]interface{}, 0, len(msgs)*6)
 	for i, msg := range msgs {
@@ -476,14 +404,10 @@ func (s *MessageStore) InsertMessagesBatch(ctx context.Context, tableName string
 	return res.RowsAffected()
 }
 
-func (s *MessageStore) UpdateMessage(ctx context.Context, tableName string, msg *Message) (int64, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return 0, err
-	}
-	res, err := s.db.ExecContext(ctx, fmt.Sprintf(`
-		UPDATE %s SET conv_id = $1, from_uid = $2, content = $3, ts = $4, is_recalled = $5
-		WHERE msg_id = $6`, quoted),
+func (s *MessageStore) UpdateMessage(ctx context.Context, msg *Message) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE messages SET conv_id = $1, from_uid = $2, content = $3, ts = $4, is_recalled = $5
+		WHERE msg_id = $6`,
 		msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled, msg.MsgID,
 	)
 	if err != nil {
@@ -492,12 +416,8 @@ func (s *MessageStore) UpdateMessage(ctx context.Context, tableName string, msg 
 	return res.RowsAffected()
 }
 
-func (s *MessageStore) DeleteMessage(ctx context.Context, tableName string, msgID int64) (int64, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return 0, err
-	}
-	res, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE msg_id = $1`, quoted), msgID)
+func (s *MessageStore) DeleteMessage(ctx context.Context, msgID int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE msg_id = $1`, msgID)
 	if err != nil {
 		return 0, err
 	}
@@ -560,78 +480,46 @@ func (s *MessageStore) GetConversationMessagesByRange(ctx context.Context, convI
 	}, nil
 }
 
-func (s *MessageStore) GetMessageCount(ctx context.Context, tableName string, convID string) (int, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return 0, err
-	}
+func (s *MessageStore) GetMessageCount(ctx context.Context, convID string) (int, error) {
 	var count int
-	err = s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE conv_id = $1`, quoted), convID).Scan(&count)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE conv_id = $1`, convID).Scan(&count)
 	return count, err
 }
 
-func (s *MessageStore) MessageExists(ctx context.Context, tableName string, msgID int64) (bool, error) {
-	quoted, err := s.quoteTableName(tableName)
-	if err != nil {
-		return false, err
-	}
+func (s *MessageStore) MessageExists(ctx context.Context, msgID int64) (bool, error) {
 	var exists bool
-	err = s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE msg_id = $1)`, quoted), msgID).Scan(&exists)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages WHERE msg_id = $1)`, msgID).Scan(&exists)
 	return exists, err
 }
 
-func (s *MessageStore) CreateMessageTable(tableName string) (int64, error) {
-	if !s.IsValidTableName(tableName) {
-		return 0, fmt.Errorf("invalid table name: %s", tableName)
+func (s *MessageStore) EnsurePartition(tableName string) error {
+	date, err := time.Parse("20060102", tableName[9:])
+	if err != nil {
+		return err
 	}
-	// ensure parent partitioned table exists
-	if err := s.setupParentTable(); err != nil {
-		return 0, err
-	}
-	// create daily partition
-	date, _ := time.Parse("20060102", tableName[9:])
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).UnixMilli()
 	endOfDay := time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, time.UTC).UnixMilli()
 
-	sql := fmt.Sprintf(`
+	_, err = s.db.Exec(fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s PARTITION OF messages
 		FOR VALUES FROM (%d) TO (%d)`,
-		tableName, startOfDay, endOfDay)
-
-	_, err := s.db.Exec(sql)
+		tableName, startOfDay, endOfDay))
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	// create indexes on the partition
 	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_msg_conv_ts_%s ON %s (conv_id, ts DESC)`, tableName[9:], tableName))
 	if err != nil {
-		return 1, err
-	}
-	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_msg_conv_id_%s ON %s (conv_id, msg_id)`, tableName[9:], tableName))
-	if err != nil {
-		return 1, err
+		return err
 	}
 	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_msg_from_uid_%s ON %s (from_uid)`, tableName[9:], tableName))
 	if err != nil {
-		return 1, err
+		return err
 	}
-	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_msg_id_uid_%s ON %s (msg_id, from_uid)`, tableName[9:], tableName))
-	return 1, err
+	return nil
 }
 
-func (s *MessageStore) DropMessageTable(tableName string) (int64, error) {
-	if !s.IsValidTableName(tableName) {
-		return 0, fmt.Errorf("invalid table name: %s", tableName)
-	}
-	res, err := s.db.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tableName))
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
-}
-
-func (s *MessageStore) GetMaxMessageID(tableName string) (int64, error) {
+func (s *MessageStore) GetMaxMessageID() (int64, error) {
 	var maxID sql.NullInt64
 	err := s.db.QueryRow(`SELECT MAX(msg_id) FROM messages`).Scan(&maxID)
 	if err != nil {
@@ -641,18 +529,6 @@ func (s *MessageStore) GetMaxMessageID(tableName string) (int64, error) {
 		return maxID.Int64, nil
 	}
 	return 0, nil
-}
-
-func (s *MessageStore) GetMaxMessageIDsFromRecentTables(days int) ([]int64, error) {
-	// for partitioned table, just get global max
-	maxID, err := s.GetMaxMessageID("")
-	if err != nil {
-		return nil, err
-	}
-	if maxID > 0 {
-		return []int64{maxID}, nil
-	}
-	return nil, nil
 }
 
 func (s *MessageStore) HasNewMessagesAfter(ctx context.Context, userID int64, lastMsgID int64) (bool, error) {

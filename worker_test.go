@@ -214,9 +214,9 @@ func TestWorker_RunAnalyze(t *testing.T) {
 	ctx := context.Background()
 
 	tableName := MessageTableNameByDate(time.Now())
-	_, err := worker.msgStore.CreateMessageTable(tableName)
+	err := worker.msgStore.EnsurePartition(tableName)
 	if err != nil {
-		t.Fatalf("failed to create message table: %v", err)
+		t.Fatalf("failed to create message partition: %v", err)
 	}
 
 	_, err = db.ExecContext(ctx, fmt.Sprintf(
@@ -246,17 +246,17 @@ func TestWorker_DropExpiredPartitions(t *testing.T) {
 	expiredDate := time.Now().UTC().AddDate(0, 0, -10)
 	expiredTableName := MessageTableNameByDate(expiredDate)
 
-	_, err := worker.msgStore.CreateMessageTable(expiredTableName)
+	err := worker.msgStore.EnsurePartition(expiredTableName)
 	if err != nil {
-		t.Fatalf("failed to create expired table: %v", err)
+		t.Fatalf("failed to create expired partition: %v", err)
 	}
 
 	validDate := time.Now().UTC()
 	validTableName := MessageTableNameByDate(validDate)
 
-	_, err = worker.msgStore.CreateMessageTable(validTableName)
+	err = worker.msgStore.EnsurePartition(validTableName)
 	if err != nil {
-		t.Fatalf("failed to create valid table: %v", err)
+		t.Fatalf("failed to create valid partition: %v", err)
 	}
 
 	var countBefore int

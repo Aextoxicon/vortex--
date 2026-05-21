@@ -8,7 +8,6 @@ import requests
 import json
 import time
 from typing import Dict, List, Optional
-from datetime import datetime
 
 # 配置
 BASE_URL = "http://localhost:8080"
@@ -148,7 +147,7 @@ class VortexTester:
                 response = requests.post(url, json=data, headers=headers)
                 if response.status_code == 201:
                     result = response.json()
-                    msg_id = result.get('message', {}).get('id')
+                    msg_id = result.get('msg_id')
                     print(f"✅ 发送消息成功 (msg_id: {msg_id})")
                     return result
                 elif response.status_code == 500 and attempt < retry - 1:
@@ -219,7 +218,10 @@ class VortexTester:
             response = requests.get(url, headers=headers)
             if response.status_code == 200:
                 result = response.json()
-                print(f"✅ 检查新消息：has_new={result.get('has_new')}, unread_count={result.get('unread_count')}")
+                status = result.get('status', 0)
+                has_new = bool(status & 1)
+                has_requests = bool(status & 2)
+                print(f"✅ 检查新消息：新消息={'有' if has_new else '无'}, 好友请求={'有' if has_requests else '无'} (status={status})")
                 return result
             else:
                 print(f"❌ 检查新消息失败：{response.status_code} - {response.text}")
@@ -253,14 +255,13 @@ class VortexTester:
         return f"p_{public_id2}_{public_id1}"
 
     def create_message_table_if_needed(self) -> bool:
-        """确保消息表存在（等待 worker 创建）"""
+        """检查服务器并等待 Worker 创建消息分区"""
         print("\n检查服务器状态...")
         try:
             response = requests.get(f"{self.base_url}/health")
             if response.status_code == 200:
                 print("✅ 服务器运行正常")
-                # Worker 启动时会自动创建消息表，等待一下
-                print("等待 Worker 创建消息表...")
+                print("等待 Worker 创建当日消息分区...")
                 time.sleep(3)
                 return True
             else:

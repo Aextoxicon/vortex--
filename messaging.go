@@ -205,7 +205,6 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 	}
 
 	ts := time.Now().UnixMilli() - s.cfg.EpochTime
-	tableName := MessageTableNameByTs(ts)
 
 	msg := &Message{
 		MsgID:   msgID,
@@ -248,7 +247,7 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 		return nil, err
 	}
 
-	_, err = s.msgStore.InsertMessageTx(tx, tableName, msg)
+	_, err = s.msgStore.InsertMessageTx(tx, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -276,9 +275,8 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 	return result, nil
 }
 
-func (s *Service) GetMessage(ctx context.Context, msgID, msgTimestamp int64) (*Message, error) {
-	tableName := MessageTableNameByTs(msgTimestamp)
-	msg, err := s.msgStore.GetMessage(ctx, tableName, msgID)
+func (s *Service) GetMessage(ctx context.Context, msgID int64) (*Message, error) {
+	msg, err := s.msgStore.GetMessage(ctx, msgID)
 	if err != nil {
 		return nil, err
 	}
@@ -363,8 +361,7 @@ func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID
 		return ErrRecallWindowExpired
 	}
 
-	tableName := MessageTableNameByTs(msgTimestamp)
-	msg, err := s.msgStore.GetMessage(ctx, tableName, msgID)
+	msg, err := s.msgStore.GetMessage(ctx, msgID)
 	if err != nil {
 		return err
 	}
@@ -380,7 +377,7 @@ func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID
 
 	msg.IsRecalled = 1
 	msg.Content = ""
-	_, err = s.msgStore.UpdateMessage(ctx, tableName, msg)
+	_, err = s.msgStore.UpdateMessage(ctx, msg)
 	if err != nil {
 		return err
 	}
@@ -400,7 +397,6 @@ func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID
 	}
 
 	recallTs := time.Now().UnixMilli() - s.cfg.EpochTime
-	recallTableName := MessageTableNameByTs(recallTs)
 
 	recallMsg := &Message{
 		MsgID:      recallMsgID,
@@ -411,7 +407,7 @@ func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID
 		IsRecalled: 1,
 	}
 
-	_, err = s.msgStore.InsertMessage(ctx, recallTableName, recallMsg)
+	_, err = s.msgStore.InsertMessage(ctx, recallMsg)
 	return err
 }
 
@@ -675,13 +671,4 @@ func (s *Service) GetConversationList(ctx context.Context, userID int64, limit, 
 		Conversations: conversations,
 		Total:         len(conversations),
 	}, nil
-}
-
-func MessageTableNameByDate(date time.Time) string {
-	return fmt.Sprintf("messages_%s", date.Format("20060102"))
-}
-
-func MessageTableNameByTs(ts int64) string {
-	t := time.UnixMilli(ts)
-	return MessageTableNameByDate(t)
 }
