@@ -100,6 +100,11 @@ func (w *Worker) createTablesFromTodayToSunday() {
 	slog.Info("initial message tables created")
 }
 
+// CreateTablesFromTodayToSunday 公开方法，用于主程序启动时同步创建分区表
+func (w *Worker) CreateTablesFromTodayToSunday() {
+	w.createTablesFromTodayToSunday()
+}
+
 func (w *Worker) createWeekTables() {
 	now := time.Now().UTC()
 	weekday := int(now.Weekday())

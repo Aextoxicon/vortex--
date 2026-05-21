@@ -98,6 +98,8 @@ func main() {
 	}
 
 	worker := NewWorker(cfg, svc, msgStore)
+	// 在启动 Worker 之前，先同步创建分区表，确保立即可用
+	worker.CreateTablesFromTodayToSunday()
 	worker.Start()
 
 	quit := make(chan os.Signal, 2)
