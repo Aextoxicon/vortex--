@@ -9,11 +9,12 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db        *sql.DB
+	epochTime int64
 }
 
-func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+func NewStore(db *sql.DB, epochTime int64) *Store {
+	return &Store{db: db, epochTime: epochTime}
 }
 
 func (s *Store) DB() *sql.DB {
@@ -497,8 +498,8 @@ func (s *MessageStore) EnsurePartition(tableName string) error {
 	if err != nil {
 		return err
 	}
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).UnixMilli()
-	endOfDay := time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).UnixMilli() - s.epochTime
+	endOfDay := time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, time.UTC).UnixMilli() - s.epochTime
 
 	_, err = s.db.Exec(fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s PARTITION OF messages

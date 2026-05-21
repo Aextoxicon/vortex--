@@ -35,7 +35,7 @@ func setupTestService(t *testing.T) (*Service, *sql.DB, *testutil.PostgresContai
 		pgContainer.Cleanup(t)
 	})
 
-	store := NewStore(db)
+	store := NewStore(db, 0)
 	userStore := &UserStore{Store: store}
 	msgStore := &MessageStore{Store: store}
 	groupStore := &GroupStore{Store: store}

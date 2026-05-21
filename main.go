@@ -47,7 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := NewStore(db)
+	store := NewStore(db, cfg.EpochTime)
 	rateLimiter := NewRateLimiter()
 	rateLimiter.StartCleanup(time.Minute, 5*time.Minute)
 

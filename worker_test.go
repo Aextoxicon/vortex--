@@ -36,7 +36,7 @@ func setupTestWorker(t *testing.T) (*Worker, *sql.DB, *testutil.PostgresContaine
 		pgContainer.Cleanup(t)
 	})
 
-	store := NewStore(db)
+	store := NewStore(db, 0)
 	msgStore := &MessageStore{Store: store}
 
 	cfg := &Config{

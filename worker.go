@@ -60,7 +60,7 @@ func (w *Worker) Stop() {
 func (w *Worker) runTableManager() {
 	defer w.wg.Done()
 
-	w.createTablesFromTodayToSunday()
+	// 由主程序启动时同步调用 CreateTablesFromTodayToSunday，此处不再重复创建
 
 	nextMonday := calculateNextMondayDelay()
 	select {
