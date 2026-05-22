@@ -49,12 +49,11 @@ class VortexTester:
             if response.status_code == 201:
                 result = response.json()
                 print(f"✅ 成功注册用户：{username} (public_id: {result['public_id']})")
-                # 注册时也返回 token，可以直接使用
+                # 注册不返回 token，需要单独登录
                 return {
                     "public_id": result["public_id"],
                     "username": result["username"],
-                    "email": result["email"],
-                    "token": result["token"]
+                    "email": result["email"]
                 }
             else:
                 print(f"❌ 注册用户 {username} 失败：{response.status_code} - {response.text}")
@@ -292,15 +291,13 @@ class VortexTester:
                     "public_id": result["public_id"],
                     "email": user_data["email"]
                 })
-                # 使用注册时返回的 token
-                self.tokens[user_data["username"]] = result["token"]
             time.sleep(0.5)  # 避免限流
 
         if len(self.users) < 2:
             print("\n❌ 需要至少 2 个用户来创建好友关系！")
             return
 
-        # 2. 登录所有用户（重新获取 token，确保是最新的）
+        # 2. 登录所有用户获取 token
         print("\n--- 2. 登录用户 ---")
         for user in self.users:
             token = self.login_user(user["username"], PASSWORD)
@@ -394,6 +391,9 @@ class VortexTester:
         )
         if group:
             group_id = group.get('id')
+            # 创建者也加入群组（虽然后端会自动添加，但显式调用确保成员关系生效）
+            time.sleep(0.5)
+            self.join_group(self.tokens[self.users[0]["username"]], group_id)
             # 其他用户加入群组
             time.sleep(0.5)
             self.join_group(self.tokens[self.users[1]["username"]], group_id)
@@ -402,8 +402,8 @@ class VortexTester:
             time.sleep(0.5)
 
             # 在群组中发送消息
-            # group_id 已经包含 "g_" 前缀，直接使用
-            conv_id = group_id
+            # 群组会话 ID 格式为 "g_{group_id}"
+            conv_id = f"g_{group_id}"
             print(f"\n在群组中发送消息:")
             self.send_message(self.tokens[self.users[0]["username"]], conv_id, "欢迎大家加入测试群组！")
             time.sleep(0.5)

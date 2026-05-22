@@ -12,7 +12,7 @@ func TestValidatePassword(t *testing.T) {
 	}{
 		{"valid password", "Test1234!", true},
 		{"too short", "Test1!", false},
-		{"too long", "Test1234!Test1234!Test", false},
+		{"too long", "Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test1234!Test", false},
 		{"no uppercase", "test1234!", false},
 		{"no lowercase", "TEST1234!", false},
 		{"no digit", "TestTest!", false},

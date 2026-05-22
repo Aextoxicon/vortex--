@@ -34,7 +34,7 @@ var (
 )
 
 func validatePassword(password string) bool {
-	if len(password) < 8 || len(password) > 16 {
+	if len(password) < 8 || len(password) > 128 {
 		return false
 	}
 
@@ -108,17 +108,10 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	token, err := h.jwt.GenerateToken(user)
-	if err != nil {
-		handleError(c, ErrTokenGeneration)
-		return
-	}
-
 	c.JSON(http.StatusCreated, gin.H{
 		"public_id": user.PublicID,
 		"username":  user.Username,
 		"email":     user.Email,
-		"token":     token,
 	})
 }
 
@@ -129,25 +122,22 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
+	rateLimiter := c.MustGet("rateLimiter").(*RateLimiter)
+	ip := c.ClientIP()
+
 	user, err := h.svc.GetUserByUsername(c.Request.Context(), req.Username)
 	if err != nil {
-		rateLimiter := c.MustGet("rateLimiter").(*RateLimiter)
-		ip := c.ClientIP()
 		rateLimiter.RecordFailure(ip)
 		handleError(c, ErrInvalidCredentials)
 		return
 	}
 
 	if err := h.svc.ValidateCredentials(user, req.Password); err != nil {
-		rateLimiter := c.MustGet("rateLimiter").(*RateLimiter)
-		ip := c.ClientIP()
 		rateLimiter.RecordFailure(ip)
 		handleError(c, ErrInvalidCredentials)
 		return
 	}
 
-	rateLimiter := c.MustGet("rateLimiter").(*RateLimiter)
-	ip := c.ClientIP()
 	rateLimiter.ResetFailure(ip)
 
 	token, err := h.jwt.GenerateToken(user)
@@ -297,6 +287,13 @@ func (s *Service) GetUserByPublicID(ctx context.Context, publicID string) (*User
 	return user, nil
 }
 
+func (s *Service) GetUsersByIDs(ctx context.Context, userIDs []int64) (map[int64]*User, error) {
+	if len(userIDs) == 0 {
+		return make(map[int64]*User), nil
+	}
+	return s.userStore.GetByIDs(ctx, userIDs)
+}
+
 func (s *Service) GetPublicIDByUserID(ctx context.Context, userID int64) (string, error) {
 	user, err := s.GetUserByID(ctx, userID)
 	if err != nil {
@@ -377,7 +374,7 @@ func (s *Service) DeleteUser(ctx context.Context, userID int64) error {
 		}
 	}
 
-	tx, err := s.userStore.DB().Begin()
+	tx, err := s.userStore.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

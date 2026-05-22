@@ -157,7 +157,7 @@ func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifTy
 		return 0, fmt.Errorf("notification marshal failed: %w", err)
 	}
 
-	msgID, err := s.idGen.GenerateID()
+	msgID, err := s.idGen.GenerateID(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -180,8 +180,8 @@ func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifTy
 	return msgID, nil
 }
 
-func (s *Service) sendSystemMessageTx(tx *sql.Tx, convID string, content []byte) (int64, error) {
-	msgID, err := s.idGen.GenerateID()
+func (s *Service) sendSystemMessageTx(ctx context.Context, tx *sql.Tx, convID string, content []byte) (int64, error) {
+	msgID, err := s.idGen.GenerateID(ctx)
 	if err != nil {
 		return 0, err
 	}

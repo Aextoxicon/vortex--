@@ -33,6 +33,7 @@ func init() {
 }
 
 func main() {
+	PrintStartupInfo()
 	cfg := LoadConfig()
 
 	db, err := initDB(cfg)
@@ -64,10 +65,15 @@ func main() {
 	idGen.Init()
 
 	var s3Service *S3Service
-	if cfg.S3Bucket != "" {
-		s3Service, err = NewS3Service(context.Background(), cfg.S3Bucket, cfg.S3Region, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey)
+	if cfg.S3URL != "" {
+		s3Cfg, err := ParseS3URL(cfg.S3URL)
 		if err != nil {
-			slog.Warn("failed to init S3 service, file upload will be disabled", "error", err)
+			slog.Warn("failed to parse S3 URL, file upload will be disabled", "error", err)
+		} else {
+			s3Service, err = NewS3Service(context.Background(), s3Cfg.Bucket, s3Cfg.Region, s3Cfg.Endpoint, s3Cfg.AccessKey, s3Cfg.SecretKey)
+			if err != nil {
+				slog.Warn("failed to init S3 service, file upload will be disabled", "error", err)
+			}
 		}
 	}
 
@@ -99,7 +105,10 @@ func main() {
 
 	worker := NewWorker(cfg, svc, msgStore)
 	// 在启动 Worker 之前，先同步创建分区表，确保立即可用
-	worker.CreateTablesFromTodayToSunday()
+	if err := worker.CreateTablesFromTodayToSundayWithError(); err != nil {
+		slog.Error("failed to create initial partition tables", "error", err)
+		os.Exit(1)
+	}
 	worker.Start()
 
 	quit := make(chan os.Signal, 2)
@@ -141,17 +150,24 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 		start := time.Now()
 		c.Next()
 
+		// 跳过健康检查端点
 		if c.Request.URL.Path == "/health" || c.Request.URL.Path == "/ready" {
 			return
 		}
 
-		slog.Info("request",
-			"method", c.Request.Method,
-			"path", c.Request.URL.Path,
-			"status", c.Writer.Status(),
-			"latency_ms", time.Since(start).Milliseconds(),
-			"ip", c.ClientIP(),
-		)
+		latency := time.Since(start)
+		status := c.Writer.Status()
+
+		// 只记录慢请求 (>500ms) 或错误请求 (>=400) 或特定路径
+		if latency > 500*time.Millisecond || status >= 400 {
+			slog.Info("slow/error request",
+				"method", c.Request.Method,
+				"path", c.Request.URL.Path,
+				"status", status,
+				"latency_ms", latency.Milliseconds(),
+				"ip", c.ClientIP(),
+			)
+		}
 	})
 
 	r.Use(func(c *gin.Context) {
@@ -162,6 +178,7 @@ func setupRoutes(r *gin.Engine, h *Handler, jwtService *JwtService, us *UserStor
 
 	r.GET("/health", h.HealthCheck)
 	r.GET("/ready", h.ReadinessCheck)
+	r.GET("/metrics", h.Metrics)
 
 	api := r.Group("/api")
 	{

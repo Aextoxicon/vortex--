@@ -162,7 +162,9 @@ func (s *Service) SendFriendRequest(ctx context.Context, fromUserID, toUserID in
 		}
 		tx = nil
 		goSafe(func() {
-			_ = s.SendFriendAcceptedNotification(context.Background(), fromUserID, toUserID, fmt.Sprintf("%d", reverseID))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.SendFriendAcceptedNotification(ctx, fromUserID, toUserID, fmt.Sprintf("%d", reverseID))
 		})
 		return 0, true, nil
 	}
@@ -176,7 +178,7 @@ func (s *Service) SendFriendRequest(ctx context.Context, fromUserID, toUserID in
 		UpdatedAt:  time.Now().UnixMilli(),
 	}
 
-	result, err := s.friendStore.Insert(ctx, req)
+	result, err := s.friendStore.InsertTx(tx, req)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return 0, false, ErrConflict
@@ -190,7 +192,9 @@ func (s *Service) SendFriendRequest(ctx context.Context, fromUserID, toUserID in
 	tx = nil
 
 	goSafe(func() {
-		_ = s.SendFriendNotification(context.Background(), toUserID, fromUserID, fmt.Sprintf("%d", result))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.SendFriendNotification(ctx, toUserID, fromUserID, fmt.Sprintf("%d", result))
 	})
 
 	return result, false, nil
@@ -250,7 +254,9 @@ func (s *Service) AcceptFriendRequest(ctx context.Context, requestID, userID int
 	tx = nil
 
 	goSafe(func() {
-		_ = s.SendFriendAcceptedNotification(context.Background(), fromUserID, userID, fmt.Sprintf("%d", requestID))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.SendFriendAcceptedNotification(ctx, fromUserID, userID, fmt.Sprintf("%d", requestID))
 	})
 
 	return nil

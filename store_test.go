@@ -147,6 +147,69 @@ func TestUserStore_GetByPublicID(t *testing.T) {
 	}
 }
 
+func TestUserStore_GetByIDs(t *testing.T) {
+	store, _, _ := setupTestStore(t)
+	userStore := &UserStore{Store: store}
+	ctx := context.Background()
+
+	now := time.Now().UnixMilli()
+
+	user1 := &User{
+		Username:  "batchuser1",
+		PwdHash:   "hash1",
+		Email:     "batch1@example.com",
+		PublicID:  "batch_pub_1",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	user2 := &User{
+		Username:  "batchuser2",
+		PwdHash:   "hash2",
+		Email:     "batch2@example.com",
+		PublicID:  "batch_pub_2",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	id1, err := userStore.Insert(ctx, user1)
+	if err != nil {
+		t.Fatalf("failed to insert user1: %v", err)
+	}
+	id2, err := userStore.Insert(ctx, user2)
+	if err != nil {
+		t.Fatalf("failed to insert user2: %v", err)
+	}
+
+	result, err := userStore.GetByIDs(ctx, []int64{id1, id2})
+	if err != nil {
+		t.Fatalf("failed to get users by IDs: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Errorf("expected 2 users, got %d", len(result))
+	}
+
+	if u, ok := result[id1]; !ok {
+		t.Error("expected user1 in result")
+	} else if u.Username != "batchuser1" {
+		t.Errorf("expected username batchuser1, got %s", u.Username)
+	}
+
+	if u, ok := result[id2]; !ok {
+		t.Error("expected user2 in result")
+	} else if u.Username != "batchuser2" {
+		t.Errorf("expected username batchuser2, got %s", u.Username)
+	}
+
+	emptyResult, err := userStore.GetByIDs(ctx, []int64{})
+	if err != nil {
+		t.Fatalf("failed to get users by empty IDs: %v", err)
+	}
+	if len(emptyResult) != 0 {
+		t.Errorf("expected empty result for empty IDs, got %d", len(emptyResult))
+	}
+}
+
 func TestUserStore_Update(t *testing.T) {
 	store, _, _ := setupTestStore(t)
 	userStore := &UserStore{Store: store}

@@ -199,6 +199,29 @@ type UserStore struct {
 	*Store
 }
 
+func (s *UserStore) GetByIDs(ctx context.Context, ids []int64) (map[int64]*User, error) {
+	if len(ids) == 0 {
+		return make(map[int64]*User), nil
+	}
+
+	query := `SELECT id, username, pwd_hash, email, public_id, created_at, updated_at FROM users WHERE id = ANY($1)`
+	rows, err := s.db.QueryContext(ctx, query, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int64]*User)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.PwdHash, &u.Email, &u.PublicID, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result[u.ID] = &u
+	}
+	return result, rows.Err()
+}
+
 func (s *UserStore) GetByID(ctx context.Context, id int64) (*User, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, username, pwd_hash, email, public_id, created_at, updated_at FROM users WHERE id = $1`, id)
 	return scanUser(row)
@@ -758,8 +781,8 @@ func (s *FriendRequestStore) AreFriends(ctx context.Context, userID1, userID2 in
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM (
 			SELECT 1 FROM friend_requests
-			WHERE (from_user_id = $1 AND to_user_id = $2)
-			   OR (from_user_id = $2 AND to_user_id = $1)
+			WHERE ((from_user_id = $1 AND to_user_id = $2)
+				OR (from_user_id = $2 AND to_user_id = $1))
 			AND status = 'accepted'
 			LIMIT 1
 		) t`, userID1, userID2).Scan(&count)
@@ -784,6 +807,17 @@ func (s *FriendRequestStore) HasPendingRequests(ctx context.Context, userID int6
 func (s *FriendRequestStore) Insert(ctx context.Context, req *FriendRequest) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO friend_requests (from_user_id, to_user_id, message, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id`,
+		req.FromUserID, req.ToUserID, req.Message, req.Status, req.CreatedAt, req.UpdatedAt,
+	).Scan(&id)
+	return id, err
+}
+
+func (s *FriendRequestStore) InsertTx(tx *sql.Tx, req *FriendRequest) (int64, error) {
+	var id int64
+	err := tx.QueryRow(`
 		INSERT INTO friend_requests (from_user_id, to_user_id, message, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id`,

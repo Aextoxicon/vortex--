@@ -64,7 +64,7 @@ func (g *IdGenerator) Init() {
 		if err := g.initFromDB(); err != nil {
 			slog.Warn("id generator init warning", "error", err)
 		}
-		if err := g.fetchNewSegment(); err != nil {
+		if err := g.fetchNewSegment(context.Background()); err != nil {
 			slog.Error("id generator first segment fetch failed", "error", err)
 		}
 		close(g.initDone)
@@ -107,13 +107,13 @@ func (g *IdGenerator) initFromDB() error {
 	return err
 }
 
-func (g *IdGenerator) GenerateID() (int64, error) {
+func (g *IdGenerator) GenerateID(ctx context.Context) (int64, error) {
 	g.WaitInit()
 
 	for {
 		seg := g.peekSegment()
 		if seg == nil {
-			if err := g.fetchNewSegmentSync(); err != nil {
+			if err := g.fetchNewSegmentSync(ctx); err != nil {
 				return 0, err
 			}
 			continue
@@ -126,7 +126,7 @@ func (g *IdGenerator) GenerateID() (int64, error) {
 		}
 
 		g.popSegment()
-		if err := g.fetchNewSegmentSync(); err != nil {
+		if err := g.fetchNewSegmentSync(ctx); err != nil {
 			return 0, err
 		}
 	}
@@ -161,13 +161,13 @@ func (g *IdGenerator) tryPrefetch(current *IdSegment) {
 	case g.prefetchCh <- struct{}{}:
 		go func() {
 			defer func() { <-g.prefetchCh }()
-			_ = g.fetchNewSegmentSync()
+			_ = g.fetchNewSegmentSync(context.Background())
 		}()
 	default:
 	}
 }
 
-func (g *IdGenerator) fetchNewSegmentSync() error {
+func (g *IdGenerator) fetchNewSegmentSync(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -175,11 +175,11 @@ func (g *IdGenerator) fetchNewSegmentSync() error {
 		return nil
 	}
 
-	return g.fetchNewSegmentLocked()
+	return g.fetchNewSegmentLocked(ctx)
 }
 
-func (g *IdGenerator) fetchNewSegmentLocked() error {
-	tx, err := g.msgSt.DB().Begin()
+func (g *IdGenerator) fetchNewSegmentLocked(ctx context.Context) error {
+	tx, err := g.msgSt.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -236,8 +236,8 @@ func (g *IdGenerator) fetchNewSegmentLocked() error {
 	return nil
 }
 
-func (g *IdGenerator) fetchNewSegment() error {
-	return g.fetchNewSegmentSync()
+func (g *IdGenerator) fetchNewSegment(ctx context.Context) error {
+	return g.fetchNewSegmentSync(ctx)
 }
 
 func (g *IdGenerator) GetNodeID() int64 {

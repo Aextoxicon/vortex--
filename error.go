@@ -42,7 +42,7 @@ var (
 	ErrInvalidMsgID        = &AppError{Code: "invalid_msg_id", Message: "Invalid message ID"}
 	ErrInternalServer      = &AppError{Code: "internal_server", Message: "Internal server error"}
 	ErrRecallWindowExpired = &AppError{Code: "recall_window_expired", Message: "Message recall window expired"}
-	ErrWeakPassword        = &AppError{Code: "weak_password", Message: "Password must be 8-16 characters and contain uppercase, lowercase, number, and special character"}
+	ErrWeakPassword        = &AppError{Code: "weak_password", Message: "Password must be 8-128 characters and contain uppercase, lowercase, number, and special character"}
 	ErrInvalidUsername     = &AppError{Code: "invalid_username", Message: "Username must be 3-20 characters and contain only letters, numbers, or common Asian characters"}
 	ErrInvalidEmail        = &AppError{Code: "invalid_email", Message: "Invalid email format"}
 	ErrInvalidGroupName    = &AppError{Code: "invalid_group_name", Message: "Group name must be 1-50 characters"}

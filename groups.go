@@ -294,7 +294,9 @@ func (s *Service) AddMember(ctx context.Context, groupID string, userID int64, r
 	}
 
 	goSafe(func() {
-		_ = s.SendGroupInviteNotification(context.Background(), userID, groupID, group.Name, group.OwnerID)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.SendGroupInviteNotification(ctx, userID, groupID, group.Name, group.OwnerID)
 	})
 
 	return nil
@@ -382,7 +384,7 @@ func (s *Service) KickMember(ctx context.Context, groupID string, memberID, owne
 		return fmt.Errorf("marshal system message failed: %w", err)
 	}
 
-	_, err = s.sendSystemMessageTx(tx, convID, contentBytes)
+	_, err = s.sendSystemMessageTx(ctx, tx, convID, contentBytes)
 	if err != nil {
 		return err
 	}
@@ -447,7 +449,7 @@ func IsGroupConv(convID string) bool {
 
 func ExtractGroupID(convID string) string {
 	if IsGroupConv(convID) {
-		return convID[2:] // 去掉 "g_" 前缀
+		return convID[2:] // remove "g_" prefix
 	}
 	return ""
 }

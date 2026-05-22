@@ -80,14 +80,33 @@ func (r *RateLimiter) CleanupExpired(ttl time.Duration) {
 	ttlNs := ttl.Nanoseconds()
 
 	for _, shard := range r.shards {
+		// 策略：先收集过期项，再批量删除，减少锁持有时间
+
+		// 第1步：收集过期项（持有锁，但只读不删，很快）
 		shard.mu.Lock()
+		expiredItems := make([]string, 0, 50)
 		for id, last := range shard.cache {
 			if now-last > ttlNs {
-				delete(shard.cache, id)
-				delete(shard.failCounts, id)
+				expiredItems = append(expiredItems, id)
+				if len(expiredItems) >= 100 {
+					break // 限制单次处理数量
+				}
 			}
 		}
 		shard.mu.Unlock()
+
+		// 第2步：批量删除（再次加锁，但持有时间很短）
+		if len(expiredItems) > 0 {
+			shard.mu.Lock()
+			for _, id := range expiredItems {
+				// 双重检查：确认仍然过期
+				if last, ok := shard.cache[id]; ok && now-last > ttlNs {
+					delete(shard.cache, id)
+					delete(shard.failCounts, id)
+				}
+			}
+			shard.mu.Unlock()
+		}
 	}
 }
 

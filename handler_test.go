@@ -142,7 +142,7 @@ func TestHandler_Register(t *testing.T) {
 			name:       "weak password",
 			body:       `{"username":"weakuser","password":"123","email":"weak@example.com"}`,
 			wantStatus: http.StatusBadRequest,
-			wantErr:    "Password must be 8-16 characters",
+			wantErr:    "Password must be 8-128 characters",
 		},
 		{
 			name:       "invalid username",
@@ -483,10 +483,9 @@ func TestHandler_JoinGroup_NotFound(t *testing.T) {
 func TestHandler_FriendRequestFlow(t *testing.T) {
 	handler, svc, _ := setupTestHandler(t)
 	r := setupTestGin()
-	// 为了避免路由冲突，使用更具体的路由路径
 	r.POST("/api/friends/request/send/:targetPublicId", jwtMiddleware(handler.jwt), handler.SendFriendRequest)
 	r.GET("/api/friends/requests", jwtMiddleware(handler.jwt), handler.GetFriendRequests)
-	r.POST("/api/friends/request/accept/:requestId", jwtMiddleware(handler.jwt), handler.AcceptFriendRequest)
+	r.POST("/api/friends/request/:requestId/accept", jwtMiddleware(handler.jwt), handler.AcceptFriendRequest)
 
 	ctx := context.Background()
 	user1 := createTestUser(t, svc)
@@ -536,7 +535,7 @@ func TestHandler_FriendRequestFlow(t *testing.T) {
 	requestID := int64(sendResp["id"].(float64))
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/api/friends/request/accept/"+fmt.Sprintf("%d", requestID), nil)
+	req, _ = http.NewRequest("POST", "/api/friends/request/"+fmt.Sprintf("%d", requestID)+"/accept", nil)
 	req.Header.Set("Authorization", authHeader(token2))
 	r.ServeHTTP(w, req)
 
@@ -549,7 +548,7 @@ func TestHandler_CancelFriendRequest(t *testing.T) {
 	handler, svc, _ := setupTestHandler(t)
 	r := setupTestGin()
 	r.POST("/api/friends/request/send/:targetPublicId", jwtMiddleware(handler.jwt), handler.SendFriendRequest)
-	r.DELETE("/api/friends/request/cancel/:requestId", jwtMiddleware(handler.jwt), handler.CancelFriendRequest)
+	r.DELETE("/api/friends/request/:requestId", jwtMiddleware(handler.jwt), handler.CancelFriendRequest)
 
 	ctx := context.Background()
 	user1 := createTestUser(t, svc)
@@ -577,7 +576,7 @@ func TestHandler_CancelFriendRequest(t *testing.T) {
 	requestID := int64(sendResp["id"].(float64))
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("DELETE", "/api/friends/request/cancel/"+fmt.Sprintf("%d", requestID), nil)
+	req, _ = http.NewRequest("DELETE", "/api/friends/request/"+fmt.Sprintf("%d", requestID), nil)
 	req.Header.Set("Authorization", authHeader(token1))
 	r.ServeHTTP(w, req)
 

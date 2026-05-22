@@ -105,6 +105,28 @@ func (w *Worker) CreateTablesFromTodayToSunday() {
 	w.createTablesFromTodayToSunday()
 }
 
+// CreateTablesFromTodayToSundayWithError 带错误返回的版本，用于启动时检查
+func (w *Worker) CreateTablesFromTodayToSundayWithError() error {
+	now := time.Now().UTC()
+	dayOfWeek := int(now.Weekday())
+	daysToSunday := 0
+	if dayOfWeek != 0 {
+		daysToSunday = 7 - dayOfWeek
+	}
+
+	var lastErr error
+	for offset := 0; offset <= daysToSunday; offset++ {
+		date := now.AddDate(0, 0, offset)
+		tableName := MessageTableNameByDate(date)
+		if err := w.msgStore.EnsurePartition(tableName); err != nil {
+			slog.Error("failed to create table", "table", tableName, "error", err)
+			lastErr = err
+		}
+	}
+	slog.Info("initial message tables created")
+	return lastErr
+}
+
 func (w *Worker) createWeekTables() {
 	now := time.Now().UTC()
 	weekday := int(now.Weekday())

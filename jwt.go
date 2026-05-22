@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/lib/pq"
 )
 
 type JwtClaims struct {
@@ -88,14 +90,50 @@ func (j *JwtService) IsBlacklisted(jti string) bool {
 func (j *JwtService) CleanupBlacklist() {
 	now := time.Now().UnixMilli()
 
-	_, _ = j.db.Exec(`DELETE FROM jwt_blacklist WHERE expires_at < $1`, now)
+	// 策略：先快速扫描收集过期项（持有读锁），再批量删除（持有写锁）
+	// 这样减少写锁持有时间，提高并发性能
 
-	j.blacklistMu.Lock()
-	defer j.blacklistMu.Unlock()
+	// 第1步：快速扫描，收集过期项（读锁，不阻塞其他读操作）
+	j.blacklistMu.RLock()
+	expiredItems := make([]string, 0, 100) // 预分配容量，避免频繁扩容
 	for jti, exp := range j.blacklistCache {
 		if exp < now {
-			delete(j.blacklistCache, jti)
+			expiredItems = append(expiredItems, jti)
+			if len(expiredItems) >= 1000 {
+				// 限制单次处理数量，避免内存占用过大
+				break
+			}
 		}
+	}
+	j.blacklistMu.RUnlock()
+
+	// 第2步：批量删除（写锁，但持有时间很短）
+	if len(expiredItems) > 0 {
+		j.blacklistMu.Lock()
+		// 双重检查：删除前再次确认是否过期
+		// 防止在 RUnlock 和 Lock 之间被其他 goroutine 修改
+		for _, jti := range expiredItems {
+			if exp, ok := j.blacklistCache[jti]; ok && exp < now {
+				delete(j.blacklistCache, jti)
+			}
+		}
+		j.blacklistMu.Unlock()
+
+		// 第3步：异步清理数据库（慢操作，不阻塞）
+		go func(items []string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// 使用批量删除，提高效率
+			if len(items) == 1 {
+				_, _ = j.db.ExecContext(ctx, `DELETE FROM jwt_blacklist WHERE jti = $1`, items[0])
+			} else {
+				// PostgreSQL 支持批量删除
+				_, _ = j.db.ExecContext(ctx,
+					`DELETE FROM jwt_blacklist WHERE jti = ANY($1)`,
+					pq.Array(items))
+			}
+		}(expiredItems)
 	}
 }
 

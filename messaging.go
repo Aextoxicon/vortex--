@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -199,7 +200,7 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 
 	msgType := ExtractConversationType(convID)
 
-	msgID, err := s.idGen.GenerateID()
+	msgID, err := s.idGen.GenerateID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -386,12 +387,14 @@ func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID
 	if s.s3Service != nil {
 		fileKey := extractFileKeyFromMessage(msg)
 		if fileKey != "" {
-			_ = s.s3Service.DeleteObject(ctx, fileKey)
+			if err := s.s3Service.DeleteObject(ctx, fileKey); err != nil {
+				slog.Warn("failed to delete S3 object during message recall", "file_key", fileKey, "error", err)
+			}
 		}
 	}
 
 	// 插入撤回通知消息（content 存储原消息 ID）
-	recallMsgID, err := s.idGen.GenerateID()
+	recallMsgID, err := s.idGen.GenerateID(ctx)
 	if err != nil {
 		return err
 	}
@@ -621,6 +624,18 @@ func (s *Service) GetConversationList(ctx context.Context, userID int64, limit, 
 		return nil, err
 	}
 
+	var userIDs []int64
+	for _, item := range items {
+		if item.Type == "private" && item.TargetUID != nil {
+			userIDs = append(userIDs, *item.TargetUID)
+		}
+	}
+
+	usersMap, err := s.GetUsersByIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	conversations := make([]*ConversationItem, 0, len(items))
 	for _, item := range items {
 		conv := &ConversationItem{
@@ -629,11 +644,7 @@ func (s *Service) GetConversationList(ctx context.Context, userID int64, limit, 
 		}
 
 		if item.Type == "private" && item.TargetUID != nil {
-			targetUser, err := s.GetUserByID(ctx, *item.TargetUID)
-			if err != nil {
-				return nil, err
-			}
-			if targetUser != nil {
+			if targetUser, ok := usersMap[*item.TargetUID]; ok {
 				conv.Name = targetUser.Username
 				conv.PublicID = targetUser.PublicID
 				conv.Username = targetUser.Username

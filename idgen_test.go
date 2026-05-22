@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestIDGenerator_GenerateID(t *testing.T) {
 	// Generate multiple IDs
 	ids := make([]int64, 100)
 	for i := 0; i < 100; i++ {
-		id, err := gen.GenerateID()
+		id, err := gen.GenerateID(context.Background())
 		if err != nil {
 			t.Fatalf("failed to generate ID: %v", err)
 		}
@@ -68,7 +69,7 @@ func TestIDGenerator_Concurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < idsPerGoroutine; j++ {
-				id, err := gen.GenerateID()
+				id, err := gen.GenerateID(context.Background())
 				if err != nil {
 					t.Errorf("failed to generate ID: %v", err)
 					return
@@ -114,7 +115,7 @@ func TestIDGenerator_TimestampExtraction(t *testing.T) {
 	gen := NewIdGenerator(cfg, idGenSt, msgSt, cfg.NodeID)
 	gen.Init()
 
-	id, err := gen.GenerateID()
+	id, err := gen.GenerateID(context.Background())
 	if err != nil {
 		t.Fatalf("failed to generate ID: %v", err)
 	}
