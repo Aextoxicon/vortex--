@@ -39,6 +39,7 @@ func (s *IdSegment) Remaining() int {
 type IdGenerator struct {
 	cfg        *Config
 	nodeID     int64
+	epochTime  int64
 	mu         sync.Mutex
 	segments   []*IdSegment
 	prefetchCh chan struct{}
@@ -85,6 +86,7 @@ func (g *IdGenerator) initFromDB() error {
 	}
 
 	if state != nil {
+		g.epochTime = state.EpochTime
 		return nil
 	}
 
@@ -102,12 +104,19 @@ func (g *IdGenerator) initFromDB() error {
 		}
 	}
 
+	g.epochTime = g.cfg.EpochTime
 	initState := &IdGeneratorState{
-		LastTs: startTs + g.cfg.SegmentDurationMs,
+		LastTs:    startTs + g.cfg.SegmentDurationMs,
+		EpochTime: g.epochTime,
 	}
 
 	_, err = g.idGenSt.Insert(initState)
 	return err
+}
+
+func (g *IdGenerator) GetEpochTime() int64 {
+	g.WaitInit()
+	return g.epochTime
 }
 
 func (g *IdGenerator) GenerateID(ctx context.Context) (int64, error) {

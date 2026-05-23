@@ -71,6 +71,7 @@ func main() {
 
 	idGen := NewIdGenerator(cfg, idGenStateStore, msgStore, cfg.NodeID)
 	idGen.Init()
+	store.SetEpochTime(idGen.GetEpochTime())
 
 	var s3Service *S3Service
 	if cfg.S3URL != "" {
@@ -95,7 +96,7 @@ func main() {
 	)
 
 	jwtService := NewJwtService(db, cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTExpiresMinutes)
-	jwtService.StartCleanup(30 * time.Minute)
+	jwtService.StartCleanup(10 * time.Minute)
 	handler := NewHandler(svc, jwtService, cfg)
 
 	if os.Getenv("GIN_MODE") == "" {

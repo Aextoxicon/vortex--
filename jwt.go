@@ -13,6 +13,8 @@ import (
 	"github.com/lib/pq"
 )
 
+const maxBlacklistCacheSize = 10000
+
 type JwtClaims struct {
 	UserID   int64  `json:"sub"`
 	PublicID string `json:"public_id"`
@@ -78,6 +80,14 @@ func (j *JwtService) BlacklistToken(jti string, expiresAt int64) error {
 	)
 	if err == nil {
 		j.blacklistMu.Lock()
+		if len(j.blacklistCache) >= maxBlacklistCacheSize {
+			now := time.Now().UnixMilli()
+			for k, v := range j.blacklistCache {
+				if v <= now {
+					delete(j.blacklistCache, k)
+				}
+			}
+		}
 		j.blacklistCache[jti] = expiresAt
 		j.blacklistMu.Unlock()
 	}
@@ -88,7 +98,13 @@ func (j *JwtService) IsBlacklisted(jti string) bool {
 	j.blacklistMu.RLock()
 	exp, ok := j.blacklistCache[jti]
 	j.blacklistMu.RUnlock()
-	return ok && exp > time.Now().UnixMilli()
+	if ok && exp <= time.Now().UnixMilli() {
+		j.blacklistMu.Lock()
+		delete(j.blacklistCache, jti)
+		j.blacklistMu.Unlock()
+		return false
+	}
+	return ok
 }
 
 func (j *JwtService) CleanupBlacklist() {

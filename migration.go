@@ -17,6 +17,7 @@ func RunMigrations(db *sql.DB) error {
 		createMessagesParentTable,
 		createJwtBlacklistTable,
 		addIsBlockedColumn,
+		addEpochTimeColumn,
 	}
 
 	for _, m := range migrations {
@@ -170,5 +171,17 @@ func createJwtBlacklistTable(db *sql.DB) error {
 }
 
 func addIsBlockedColumn(db *sql.DB) error {
-	return nil
+	_, err := db.Exec(`
+		ALTER TABLE conversation_participants
+		ADD COLUMN IF NOT EXISTS is_blocked INTEGER NOT NULL DEFAULT 0
+	`)
+	return err
+}
+
+func addEpochTimeColumn(db *sql.DB) error {
+	_, err := db.Exec(`
+		ALTER TABLE id_generator_state
+		ADD COLUMN IF NOT EXISTS epoch_time BIGINT NOT NULL DEFAULT 0
+	`)
+	return err
 }

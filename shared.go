@@ -38,7 +38,7 @@ func goSafe(fn func()) {
 	}()
 }
 
-const nanoIDAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+const nanoIDAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 func GenerateNanoID(size int) string {
 	if size <= 0 {
@@ -171,7 +171,7 @@ func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifTy
 		return 0, err
 	}
 
-	ts := time.Now().UnixMilli() - s.cfg.EpochTime
+	ts := time.Now().UnixMilli() - s.idGen.GetEpochTime()
 
 	msg := &Message{
 		MsgID:   msgID,
@@ -195,7 +195,7 @@ func (s *Service) sendSystemMessageTx(ctx context.Context, tx *sql.Tx, convID st
 		return 0, err
 	}
 
-	ts := time.Now().UnixMilli() - s.cfg.EpochTime
+	ts := time.Now().UnixMilli() - s.idGen.GetEpochTime()
 
 	msg := &Message{
 		MsgID:   msgID,

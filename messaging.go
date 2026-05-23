@@ -140,9 +140,7 @@ func (h *Handler) RecallMessage(c *gin.Context) {
 		return
 	}
 
-	msgTimestamp := h.svc.idGen.ExtractTimestampFromMsgID(msgID)
-
-	if err := h.svc.RecallMessage(c.Request.Context(), msgID, msgTimestamp, userID); err != nil {
+	if err := h.svc.RecallMessage(c.Request.Context(), msgID, userID); err != nil {
 		handleError(c, err)
 		return
 	}
@@ -175,7 +173,6 @@ func (h *Handler) CheckNewMessages(c *gin.Context) {
 func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, content, clientMsgID string) (*SendMessageResult, error) {
 	uid := currentUser.ID
 
-	needsIdempotencyCleanup := false
 	if clientMsgID != "" {
 		isDup, existingMsgID, err := s.idempotencyStore.CheckAndInsert(ctx, uid, clientMsgID)
 		if err != nil {
@@ -190,12 +187,6 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 				Duplicate: true,
 			}, nil
 		}
-		needsIdempotencyCleanup = true
-		defer func() {
-			if needsIdempotencyCleanup {
-				s.idempotencyStore.UpdateMsgID(ctx, uid, clientMsgID, 0, convID)
-			}
-		}()
 	}
 
 	msgType := ExtractConversationType(convID)
@@ -205,7 +196,7 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 		return nil, err
 	}
 
-	ts := time.Now().UnixMilli() - s.cfg.EpochTime
+	ts := time.Now().UnixMilli() - s.idGen.GetEpochTime()
 
 	msg := &Message{
 		MsgID:   msgID,
@@ -263,7 +254,6 @@ func (s *Service) SendMessage(ctx context.Context, currentUser *User, convID, co
 		return nil, err
 	}
 	tx = nil
-	needsIdempotencyCleanup = false
 
 	result := &SendMessageResult{
 		MsgID:   fmt.Sprintf("%d", msgID),
@@ -309,8 +299,8 @@ func (s *Service) GetConversationMessages(ctx context.Context, convID string, en
 
 	// 群聊：不做 block 检查，由客户端根据用户本地的 block 列表自行过滤
 	startDate := endDate.AddDate(0, 0, -(days - 1))
-	startTs := startDate.UnixMilli() - s.cfg.EpochTime
-	endTs := endDate.AddDate(0, 0, 1).UnixMilli() - s.cfg.EpochTime
+	startTs := startDate.UnixMilli() - s.idGen.GetEpochTime()
+	endTs := endDate.AddDate(0, 0, 1).UnixMilli() - s.idGen.GetEpochTime()
 
 	return s.msgStore.GetConversationMessagesByRange(ctx, convID, startTs, endTs, pageSize, lastMsgId)
 }
@@ -337,13 +327,7 @@ func (s *Service) CheckNewMessages(ctx context.Context, userID, lastMsgID int64)
 	return status, nil
 }
 
-func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID int64) error {
-	now := time.Now().UnixMilli()
-	msgAge := now - msgTimestamp
-	if msgAge > s.cfg.MessageRecallWindowMs {
-		return ErrRecallWindowExpired
-	}
-
+func (s *Service) RecallMessage(ctx context.Context, msgID, userID int64) error {
 	msg, err := s.msgStore.GetMessage(ctx, msgID)
 	if err != nil {
 		return err
@@ -356,6 +340,12 @@ func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID
 	}
 	if msg.FromUID != userID {
 		return ErrForbidden
+	}
+
+	now := time.Now().UnixMilli()
+	msgAge := now - (msg.Ts + s.idGen.GetEpochTime())
+	if msgAge > s.cfg.MessageRecallWindowMs {
+		return ErrRecallWindowExpired
 	}
 
 	msg.IsRecalled = 1
@@ -381,7 +371,7 @@ func (s *Service) RecallMessage(ctx context.Context, msgID, msgTimestamp, userID
 		return err
 	}
 
-	recallTs := time.Now().UnixMilli() - s.cfg.EpochTime
+	recallTs := time.Now().UnixMilli() - s.idGen.GetEpochTime()
 
 	recallMsg := &Message{
 		MsgID:      recallMsgID,

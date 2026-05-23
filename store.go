@@ -17,6 +17,10 @@ func NewStore(db *sql.DB, epochTime int64) *Store {
 	return &Store{db: db, epochTime: epochTime}
 }
 
+func (s *Store) SetEpochTime(epochTime int64) {
+	s.epochTime = epochTime
+}
+
 func (s *Store) DB() *sql.DB {
 	return s.db
 }
@@ -76,8 +80,9 @@ type ConversationParticipant struct {
 }
 
 type IdGeneratorState struct {
-	ID     int64 `db:"id"`
-	LastTs int64 `db:"last_ts"`
+	ID        int64 `db:"id"`
+	LastTs    int64 `db:"last_ts"`
+	EpochTime int64 `db:"epoch_time"`
 }
 
 type MessageIdempotency struct {
@@ -186,7 +191,7 @@ func scanFriendRequests(rows *sql.Rows) ([]*FriendRequest, error) {
 
 func scanIdGenState(row *sql.Row) (*IdGeneratorState, error) {
 	var s IdGeneratorState
-	err := row.Scan(&s.ID, &s.LastTs)
+	err := row.Scan(&s.ID, &s.LastTs, &s.EpochTime)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -402,32 +407,6 @@ func (s *MessageStore) InsertMessageTx(tx *sql.Tx, msg *Message) (int64, error) 
 	return msg.MsgID, err
 }
 
-func (s *MessageStore) InsertMessagesBatch(ctx context.Context, msgs []*Message) (int64, error) {
-	if len(msgs) == 0 {
-		return 0, nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString("INSERT INTO messages (msg_id, conv_id, from_uid, content, ts, is_recalled) VALUES ")
-
-	args := make([]interface{}, 0, len(msgs)*6)
-	for i, msg := range msgs {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d)",
-			i*6+1, i*6+2, i*6+3, i*6+4, i*6+5, i*6+6))
-		args = append(args, msg.MsgID, msg.ConvID, msg.FromUID, msg.Content, msg.Ts, msg.IsRecalled)
-	}
-	sb.WriteString(" ON CONFLICT (msg_id) DO NOTHING")
-
-	res, err := s.db.ExecContext(ctx, sb.String(), args...)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
-}
-
 func (s *MessageStore) UpdateMessage(ctx context.Context, msg *Message) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE messages SET conv_id = $1, from_uid = $2, content = $3, ts = $4, is_recalled = $5
@@ -524,19 +503,25 @@ func (s *MessageStore) EnsurePartition(tableName string) error {
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).UnixMilli() - s.epochTime
 	endOfDay := time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, time.UTC).UnixMilli() - s.epochTime
 
-	_, err = s.db.Exec(fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s PARTITION OF messages
-		FOR VALUES FROM (%d) TO (%d)`,
-		tableName, startOfDay, endOfDay))
+	var quoted string
+	err = s.db.QueryRow("SELECT quote_ident($1)", tableName).Scan(&quoted)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_msg_conv_ts_%s ON %s (conv_id, ts DESC)`, tableName[9:], tableName))
+	_, err = s.db.Exec(fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s PARTITION OF messages
+		FOR VALUES FROM (%d) TO (%d)`,
+		quoted, startOfDay, endOfDay))
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_msg_from_uid_%s ON %s (from_uid)`, tableName[9:], tableName))
+
+	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_msg_conv_ts_%s ON %s (conv_id, ts DESC)`, tableName[9:], quoted))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_msg_from_uid_%s ON %s (from_uid)`, tableName[9:], quoted))
 	if err != nil {
 		return err
 	}
@@ -977,47 +962,6 @@ func (s *ConversationParticipantStore) DeleteByUserTx(tx *sql.Tx, userID int64) 
 	return res.RowsAffected()
 }
 
-func (s *ConversationParticipantStore) InsertBatch(ctx context.Context, participants []*ConversationParticipant) (int64, error) {
-	if len(participants) == 0 {
-		return 0, nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
-		}
-	}()
-
-	var sb strings.Builder
-	sb.WriteString(`INSERT INTO conversation_participants (conv_id, user_id, join_ts, is_blocked) VALUES `)
-
-	args := make([]interface{}, 0, len(participants)*4)
-	for i, p := range participants {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d)",
-			i*4+1, i*4+2, i*4+3, i*4+4))
-		args = append(args, p.ConvID, p.UserID, p.JoinTs, p.IsBlocked)
-	}
-	sb.WriteString(" ON CONFLICT (conv_id, user_id) DO NOTHING")
-
-	res, err := tx.Exec(sb.String(), args...)
-	if err != nil {
-		return 0, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	tx = nil
-
-	return res.RowsAffected()
-}
-
 func (s *ConversationParticipantStore) InsertBatchTx(tx *sql.Tx, participants []*ConversationParticipant) (int64, error) {
 	if len(participants) == 0 {
 		return 0, nil
@@ -1211,31 +1155,31 @@ type IdGeneratorStateStore struct {
 }
 
 func (s *IdGeneratorStateStore) GetFirst(ctx context.Context) (*IdGeneratorState, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, last_ts FROM id_generator_state ORDER BY id LIMIT 1`)
+	row := s.db.QueryRowContext(ctx, `SELECT id, last_ts, epoch_time FROM id_generator_state ORDER BY id LIMIT 1`)
 	return scanIdGenState(row)
 }
 
 func (s *IdGeneratorStateStore) GetFirstForUpdate(tx *sql.Tx) (*IdGeneratorState, error) {
-	row := tx.QueryRow(`SELECT id, last_ts FROM id_generator_state ORDER BY id LIMIT 1 FOR UPDATE`)
+	row := tx.QueryRow(`SELECT id, last_ts, epoch_time FROM id_generator_state ORDER BY id LIMIT 1 FOR UPDATE`)
 	return scanIdGenState(row)
 }
 
 func (s *IdGeneratorStateStore) Insert(state *IdGeneratorState) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(`
-		INSERT INTO id_generator_state (last_ts)
-		VALUES ($1)
+		INSERT INTO id_generator_state (last_ts, epoch_time)
+		VALUES ($1, $2)
 		RETURNING id`,
-		state.LastTs,
+		state.LastTs, state.EpochTime,
 	).Scan(&id)
 	return id, err
 }
 
 func (s *IdGeneratorStateStore) Update(state *IdGeneratorState) (int64, error) {
 	res, err := s.db.Exec(`
-		UPDATE id_generator_state SET last_ts = $1
-		WHERE id = $2`,
-		state.LastTs, state.ID,
+		UPDATE id_generator_state SET last_ts = $1, epoch_time = $2
+		WHERE id = $3`,
+		state.LastTs, state.EpochTime, state.ID,
 	)
 	if err != nil {
 		return 0, err
@@ -1246,19 +1190,19 @@ func (s *IdGeneratorStateStore) Update(state *IdGeneratorState) (int64, error) {
 func (s *IdGeneratorStateStore) InsertWithTx(tx *sql.Tx, state *IdGeneratorState) (int64, error) {
 	var id int64
 	err := tx.QueryRow(`
-		INSERT INTO id_generator_state (last_ts)
-		VALUES ($1)
+		INSERT INTO id_generator_state (last_ts, epoch_time)
+		VALUES ($1, $2)
 		RETURNING id`,
-		state.LastTs,
+		state.LastTs, state.EpochTime,
 	).Scan(&id)
 	return id, err
 }
 
 func (s *IdGeneratorStateStore) UpdateWithTx(tx *sql.Tx, state *IdGeneratorState) (int64, error) {
 	res, err := tx.Exec(`
-		UPDATE id_generator_state SET last_ts = $1
-		WHERE id = $2`,
-		state.LastTs, state.ID,
+		UPDATE id_generator_state SET last_ts = $1, epoch_time = $2
+		WHERE id = $3`,
+		state.LastTs, state.EpochTime, state.ID,
 	)
 	if err != nil {
 		return 0, err
