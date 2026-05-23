@@ -96,13 +96,7 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	userID, err := h.svc.CreateUser(c.Request.Context(), req.Username, req.Password, req.Email)
-	if err != nil {
-		handleError(c, err)
-		return
-	}
-
-	user, err := h.svc.GetUserByID(c.Request.Context(), userID)
+	user, err := h.svc.CreateUser(c.Request.Context(), req.Username, req.Password, req.Email)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -305,28 +299,28 @@ func (s *Service) GetPublicIDByUserID(ctx context.Context, userID int64) (string
 	return user.PublicID, nil
 }
 
-func (s *Service) CreateUser(ctx context.Context, username, password, email string) (int64, error) {
+func (s *Service) CreateUser(ctx context.Context, username, password, email string) (*User, error) {
 	exists, err := s.userStore.UsernameExists(ctx, username)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if exists {
-		return 0, ErrConflict
+		return nil, ErrConflict
 	}
 
 	if email != "" {
 		emailExists, err := s.userStore.EmailExists(ctx, email)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		if emailExists {
-			return 0, ErrConflict
+			return nil, ErrConflict
 		}
 	}
 
 	pwdHash, err := bcrypt.GenerateFromPassword([]byte(password), s.cfg.BCryptCost)
 	if err != nil {
-		return 0, fmt.Errorf("password hashing failed: %w", err)
+		return nil, fmt.Errorf("password hashing failed: %w", err)
 	}
 
 	publicID := GenerateNanoID(s.cfg.PublicIDLength)
@@ -343,10 +337,11 @@ func (s *Service) CreateUser(ctx context.Context, username, password, email stri
 
 	result, err := s.userStore.Insert(ctx, user)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	return result, nil
+	user.ID = result
+	return user, nil
 }
 
 func (s *Service) UpdateUser(ctx context.Context, user *User) error {

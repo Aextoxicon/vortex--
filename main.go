@@ -132,7 +132,7 @@ func main() {
 	}
 	worker.Start()
 
-	quit := make(chan os.Signal, 2)
+	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
@@ -142,30 +142,30 @@ func main() {
 		}
 	}()
 
-	go func() {
-		<-quit
-		<-quit
-		slog.Warn("forced exit, skipping graceful shutdown")
-		os.Exit(1)
-	}()
-
 	<-quit
-	slog.Info("shutting down...")
+	slog.Info("shutting down gracefully...")
 
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer stopCancel()
-
-	done := make(chan struct{})
+	// 等待清理完成，最多 10 秒；若收到第二个信号则强制退出
+	cleanupDone := make(chan struct{})
 	go func() {
 		worker.Stop()
 		rateLimiter.Stop()
 		jwtService.Stop()
-		close(done)
+		close(cleanupDone)
+	}()
+
+	// 第二个信号直接强制退出
+	go func() {
+		secondSignal := make(chan os.Signal, 1)
+		signal.Notify(secondSignal, syscall.SIGINT, syscall.SIGTERM)
+		<-secondSignal
+		slog.Warn("second signal received, forcing shutdown")
+		os.Exit(1)
 	}()
 
 	select {
-	case <-done:
-	case <-stopCtx.Done():
+	case <-cleanupDone:
+	case <-time.After(10 * time.Second):
 		slog.Warn("cleanup timed out, proceeding with server shutdown")
 	}
 

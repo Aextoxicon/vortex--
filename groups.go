@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
+	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -258,7 +261,7 @@ func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
 		return err
 	}
 
-	if _, err := s.groupStore.Delete(ctx, groupID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE groups SET is_deleted = 1 WHERE group_id = $1`, groupID); err != nil {
 		return err
 	}
 
@@ -303,24 +306,37 @@ func (s *Service) AddMember(ctx context.Context, groupID string, userID int64, r
 }
 
 func (s *Service) RemoveMember(ctx context.Context, groupID string, userID int64) error {
-	isMember, err := s.groupMemStore.IsMember(ctx, groupID, userID)
+	tx, err := s.groupMemStore.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if !isMember {
-		return ErrNotMember
-	}
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
 
-	member, err := s.groupMemStore.Get(ctx, groupID, userID)
+	member, err := s.groupMemStore.GetTx(tx, groupID, userID)
 	if err != nil {
 		return err
+	}
+	if member == nil {
+		return ErrNotMember
 	}
 	if member.Role == "owner" {
 		return ErrForbidden
 	}
 
-	_, err = s.groupMemStore.DeleteByGroupAndUser(ctx, groupID, userID)
-	return err
+	_, err = s.groupMemStore.DeleteByGroupAndUserTx(tx, groupID, userID)
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	tx = nil
+	return nil
 }
 
 func (s *Service) KickMember(ctx context.Context, groupID string, memberID, ownerID int64) error {
@@ -357,7 +373,7 @@ func (s *Service) KickMember(ctx context.Context, groupID string, memberID, owne
 		}
 	}()
 
-	isMember, err := s.groupMemStore.IsMember(ctx, groupID, memberID)
+	isMember, err := s.groupMemStore.IsMemberTx(tx, groupID, memberID)
 	if err != nil {
 		return err
 	}
@@ -415,22 +431,42 @@ func (s *Service) DeleteGroupMembersByUser(ctx context.Context, tx *sql.Tx, user
 	return err
 }
 
+var seededRand = rand.New(&lockedSource{src: rand.NewSource(time.Now().UnixNano())})
+
+type lockedSource struct {
+	mu sync.Mutex
+	src rand.Source
+}
+
+func (s *lockedSource) Int63() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.src.Int63()
+}
+
+func (s *lockedSource) Seed(seed int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.src.Seed(seed)
+}
+
 func (s *Service) GenerateGroupID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	charsLen := big.NewInt(int64(len(chars)))
 	length := s.cfg.GroupIDRandomLength
 	if length <= 0 {
 		length = 8
 	}
-	bytes := make([]byte, length)
-	if _, err := crand.Read(bytes); err != nil {
-		for i := range bytes {
-			bytes[i] = byte(i)
-		}
-	}
 	buf := make([]byte, 2+length)
 	buf[0], buf[1] = 'g', '_'
 	for i := 0; i < length; i++ {
-		buf[2+i] = chars[int(bytes[i])%len(chars)]
+		n, err := crand.Int(crand.Reader, charsLen)
+		if err != nil {
+			// 不可达：crypto/rand 几乎不可能失败
+			// 作为保护，退回到 math/rand 带锁的种子随机
+			n = big.NewInt(int64(seededRand.Intn(len(chars))))
+		}
+		buf[2+i] = chars[n.Int64()]
 	}
 	return string(buf)
 }

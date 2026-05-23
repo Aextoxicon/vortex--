@@ -61,21 +61,10 @@ func createTestUser(t *testing.T, svc *Service) *User {
 
 	ctx := context.Background()
 	username := uniqueUsername()
-	userID, err := svc.CreateUser(ctx, username, "Test1234!", username+"@example.com")
+	user, err := svc.CreateUser(ctx, username, "Test1234!", username+"@example.com")
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
-
-	user, err := svc.GetUserByID(ctx, userID)
-	if err != nil {
-		t.Fatalf("failed to get user: %v", err)
-	}
-
-	publicID, err := svc.GetPublicIDByUserID(ctx, userID)
-	if err != nil {
-		t.Fatalf("failed to get public ID: %v", err)
-	}
-	user.PublicID = publicID
 
 	return user
 }

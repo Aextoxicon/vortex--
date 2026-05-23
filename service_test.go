@@ -88,22 +88,13 @@ func TestService_CreateUser(t *testing.T) {
 	password := "Test1234!"
 	email := "test@example.com"
 
-	userID, err := svc.CreateUser(ctx, username, password, email)
+	user, err := svc.CreateUser(ctx, username, password, email)
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	if userID <= 0 {
-		t.Errorf("expected positive user ID, got %d", userID)
-	}
-
-	user, err := svc.GetUserByID(ctx, userID)
-	if err != nil {
-		t.Fatalf("failed to get user: %v", err)
-	}
-
-	if user == nil {
-		t.Fatal("expected user to exist")
+	if user.ID <= 0 {
+		t.Errorf("expected positive user ID, got %d", user.ID)
 	}
 
 	if user.Username != username {
@@ -142,27 +133,22 @@ func TestService_SendMessage(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 
 	ctx := context.Background()
-	user1ID, err := svc.CreateUser(ctx, "sender", "Test1234!", "sender@example.com")
+	user1, err := svc.CreateUser(ctx, "sender", "Test1234!", "sender@example.com")
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	user2ID, err := svc.CreateUser(ctx, "receiver", "Test1234!", "receiver@example.com")
+	user2, err := svc.CreateUser(ctx, "receiver", "Test1234!", "receiver@example.com")
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	user1, err := svc.GetUserByID(ctx, user1ID)
-	if err != nil {
-		t.Fatalf("failed to get user: %v", err)
-	}
-
-	publicID1, err := svc.GetPublicIDByUserID(ctx, user1ID)
+	publicID1, err := svc.GetPublicIDByUserID(ctx, user1.ID)
 	if err != nil {
 		t.Fatalf("failed to get public ID: %v", err)
 	}
 
-	publicID2, err := svc.GetPublicIDByUserID(ctx, user2ID)
+	publicID2, err := svc.GetPublicIDByUserID(ctx, user2.ID)
 	if err != nil {
 		t.Fatalf("failed to get public ID: %v", err)
 	}
@@ -170,16 +156,16 @@ func TestService_SendMessage(t *testing.T) {
 	convID := PrivateConvID(publicID1, publicID2)
 	content := "Hello, World!"
 
-	t.Logf("DEBUG: user1ID=%d, user2ID=%d, publicID1=%s, publicID2=%s, convID=%s", user1ID, user2ID, publicID1, publicID2, convID)
+	t.Logf("DEBUG: user1.ID=%d, user2.ID=%d, publicID1=%s, publicID2=%s, convID=%s", user1.ID, user2.ID, publicID1, publicID2, convID)
 
-	reqID, _, err := svc.SendFriendRequest(ctx, user1ID, user2ID, "")
+	reqID, _, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
 	}
 
 	t.Logf("DEBUG: reqID=%d", reqID)
 
-	if err := svc.AcceptFriendRequest(ctx, reqID, user2ID); err != nil {
+	if err := svc.AcceptFriendRequest(ctx, reqID, user2.ID); err != nil {
 		t.Fatalf("failed to accept friend request: %v", err)
 	}
 
@@ -207,7 +193,7 @@ func TestService_CreateGroup(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 
 	ctx := context.Background()
-	userID, err := svc.CreateUser(ctx, "groupowner", "Test1234!", "owner@example.com")
+	user, err := svc.CreateUser(ctx, "groupowner", "Test1234!", "owner@example.com")
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
@@ -215,7 +201,7 @@ func TestService_CreateGroup(t *testing.T) {
 	groupName := "Test Group"
 	description := "A test group"
 
-	groupID, err := svc.CreateGroup(ctx, groupName, description, userID)
+	groupID, err := svc.CreateGroup(ctx, groupName, description, user.ID)
 	if err != nil {
 		t.Fatalf("failed to create group: %v", err)
 	}
@@ -237,8 +223,8 @@ func TestService_CreateGroup(t *testing.T) {
 		t.Errorf("expected group name %s, got %s", groupName, group.Name)
 	}
 
-	if group.OwnerID != userID {
-		t.Errorf("expected owner ID %d, got %d", userID, group.OwnerID)
+	if group.OwnerID != user.ID {
+		t.Errorf("expected owner ID %d, got %d", user.ID, group.OwnerID)
 	}
 }
 
@@ -257,13 +243,13 @@ func TestService_SendFriendRequest(t *testing.T) {
 	}
 
 	// 先让 user2 向 user1 发送请求
-	_, _, err = svc.SendFriendRequest(ctx, user2, user1, "")
+	_, _, err = svc.SendFriendRequest(ctx, user2.ID, user1.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request from user2: %v", err)
 	}
 
 	// 然后 user1 向 user2 发送请求，应该自动接受
-	requestID, autoAccepted, err := svc.SendFriendRequest(ctx, user1, user2, "")
+	requestID, autoAccepted, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
 	}
@@ -281,27 +267,22 @@ func TestService_SendMessage_Idempotency(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 
 	ctx := context.Background()
-	user1ID, err := svc.CreateUser(ctx, "sender", "Test1234!", "sender@example.com")
+	user1, err := svc.CreateUser(ctx, "sender", "Test1234!", "sender@example.com")
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	user2ID, err := svc.CreateUser(ctx, "receiver", "Test1234!", "receiver@example.com")
+	user2, err := svc.CreateUser(ctx, "receiver", "Test1234!", "receiver@example.com")
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	user1, err := svc.GetUserByID(ctx, user1ID)
-	if err != nil {
-		t.Fatalf("failed to get user: %v", err)
-	}
-
-	publicID1, err := svc.GetPublicIDByUserID(ctx, user1ID)
+	publicID1, err := svc.GetPublicIDByUserID(ctx, user1.ID)
 	if err != nil {
 		t.Fatalf("failed to get public ID: %v", err)
 	}
 
-	publicID2, err := svc.GetPublicIDByUserID(ctx, user2ID)
+	publicID2, err := svc.GetPublicIDByUserID(ctx, user2.ID)
 	if err != nil {
 		t.Fatalf("failed to get public ID: %v", err)
 	}
@@ -310,12 +291,12 @@ func TestService_SendMessage_Idempotency(t *testing.T) {
 	content := "Hello"
 	clientMsgID := "client_msg_123"
 
-	reqID, _, err := svc.SendFriendRequest(ctx, user1ID, user2ID, "")
+	reqID, _, err := svc.SendFriendRequest(ctx, user1.ID, user2.ID, "")
 	if err != nil {
 		t.Fatalf("failed to send friend request: %v", err)
 	}
 
-	if err := svc.AcceptFriendRequest(ctx, reqID, user2ID); err != nil {
+	if err := svc.AcceptFriendRequest(ctx, reqID, user2.ID); err != nil {
 		t.Fatalf("failed to accept friend request: %v", err)
 	}
 

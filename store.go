@@ -647,6 +647,13 @@ func (s *GroupMemberStore) Get(ctx context.Context, groupID string, uid int64) (
 	return scanGroupMember(row)
 }
 
+func (s *GroupMemberStore) GetTx(tx *sql.Tx, groupID string, uid int64) (*GroupMember, error) {
+	row := tx.QueryRow(`
+		SELECT id, group_id, uid, role, joined_at
+		FROM group_members WHERE group_id = $1 AND uid = $2`, groupID, uid)
+	return scanGroupMember(row)
+}
+
 func (s *GroupMemberStore) Insert(ctx context.Context, member *GroupMember) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, `
@@ -716,6 +723,12 @@ func (s *GroupMemberStore) DeleteByGroupTx(tx *sql.Tx, groupID string) (int64, e
 func (s *GroupMemberStore) IsMember(ctx context.Context, groupID string, uid int64) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND uid = $2)`, groupID, uid).Scan(&exists)
+	return exists, err
+}
+
+func (s *GroupMemberStore) IsMemberTx(tx *sql.Tx, groupID string, uid int64) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND uid = $2)`, groupID, uid).Scan(&exists)
 	return exists, err
 }
 
@@ -1046,6 +1059,19 @@ func (s *ConversationParticipantStore) SetBlocked(ctx context.Context, convID st
 	return err
 }
 
+func (s *ConversationParticipantStore) IsAnyBlocked(ctx context.Context, convID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM conversation_participants 
+			WHERE conv_id = $1 AND is_blocked = 1
+		)`, convID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 func (s *ConversationParticipantStore) IsBlocked(ctx context.Context, convID string, userID int64) (bool, error) {
 	var isBlocked int
 	err := s.db.QueryRowContext(ctx, `
@@ -1104,7 +1130,6 @@ func (s *ConversationParticipantStore) GetConversationList(ctx context.Context, 
 			SELECT cp.conv_id
 			FROM conversation_participants cp
 			WHERE cp.user_id = $1
-			  AND cp.is_blocked = 0
 		),
 		last_messages AS (
 			SELECT DISTINCT ON (m.conv_id)

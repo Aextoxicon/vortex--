@@ -307,25 +307,7 @@ func (s *Service) GetConversationMessages(ctx context.Context, convID string, en
 		}
 	}
 
-	if IsPrivateConv(convID) {
-		participants, err := s.convPartStore.GetParticipants(ctx, convID)
-		if err != nil {
-			return nil, err
-		}
-		for _, participantID := range participants {
-			if participantID != userID {
-				isBlocked, err := s.convPartStore.IsBlocked(ctx, convID, participantID)
-				if err != nil {
-					return nil, err
-				}
-				if isBlocked {
-					return nil, ErrForbidden
-				}
-				break
-			}
-		}
-	}
-
+	// 群聊：不做 block 检查，由客户端根据用户本地的 block 列表自行过滤
 	startDate := endDate.AddDate(0, 0, -(days - 1))
 	startTs := startDate.UnixMilli() - s.cfg.EpochTime
 	endTs := endDate.AddDate(0, 0, 1).UnixMilli() - s.cfg.EpochTime
@@ -460,11 +442,12 @@ func (s *Service) ensureSessionPermissionTx(ctx context.Context, tx *sql.Tx, uid
 			return ErrForbidden
 		}
 
-		isBlocked, err := s.convPartStore.IsBlocked(ctx, convID, targetUser.ID)
+		// 检查私聊中任一方是否 block 了对方
+		anyBlocked, err := s.convPartStore.IsAnyBlocked(ctx, convID)
 		if err != nil {
 			return err
 		}
-		if isBlocked {
+		if anyBlocked {
 			return ErrForbidden
 		}
 
