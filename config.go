@@ -11,20 +11,12 @@ import (
 	"strings"
 )
 
-type InteractiveConfigResult struct {
-	JWTSecret   string
-	DatabaseURL string
-	S3URL       string
-	NodeID      int64
-	SaveToEnv   bool
-}
-
 type Config struct {
-	// must be set
+	// 必要配置（必须通过环境变量设置）
 	NodeID    int64
 	JWTSecret string
 
-	// optional
+	// 可选配置（有合理的默认值，可通过环境变量覆盖）
 	Port           string
 	DatabaseURL    string
 	DBMaxOpenConns int
@@ -50,25 +42,25 @@ type Config struct {
 	WorkerMaintenanceInitialDelayMinutes int
 	WorkerMaintenanceIntervalHours       int
 
-	// S3
+	// S3 配置（可选，为空则不启用文件存储）
 	S3URL string
 }
 
-// optional defaults (hardcoded, must be overridden by env vars)
+// 可选配置的默认值（硬编码，需自定义时通过环境变量覆盖）
 const (
 	defaultJWTIssuer             = "vortex"
-	defaultJWTExpiresMinutes     = 10080 // 7days
+	defaultJWTExpiresMinutes     = 10080 // 7 天
 	defaultBCryptCost            = 10
-	defaultMessageRecallWindowMs = 120_000 // 2mins
+	defaultMessageRecallWindowMs = 120_000 // 2 分钟
 	defaultEpochTime             = 1_767_225_600_000
-	defaultSegmentDurationMs     = 10_000  // 10s
+	defaultSegmentDurationMs     = 10_000  // 10 秒
 	defaultSegmentSize           = 1 << 17 // 128KB
 	defaultMessageRetentionDays  = 7
 	defaultPageSize              = 100
 	defaultMaxPageSize           = 500
 	defaultPublicIDLength        = 21
 	defaultGroupIDRandomLength   = 8
-	defaultWorkerCreateInterval  = 168 // 1week
+	defaultWorkerCreateInterval  = 168 // 1 周
 	defaultMaintenanceDelay      = 5
 	defaultMaintenanceInterval   = 24
 	defaultDBMaxOpenConns        = 50
@@ -87,6 +79,8 @@ func envInt(key string, fallback int) int {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
 		}
+		fmt.Fprintf(os.Stderr, "Error: invalid value for %s: %s\n", key, v)
+		os.Exit(1)
 	}
 	return fallback
 }
@@ -96,6 +90,8 @@ func envInt64(key string, fallback int64) int64 {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return n
 		}
+		fmt.Fprintf(os.Stderr, "Error: invalid value for %s: %s\n", key, v)
+		os.Exit(1)
 	}
 	return fallback
 }
@@ -140,24 +136,6 @@ func promptInteractiveJWT() (string, error) {
 	}
 }
 
-func promptInteractiveNodeID() (int64, error) {
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("NODE_ID is not configured (must be between 0 and %d).\n", vfMaxNodeID)
-	fmt.Println("This ID uniquely identifies this server instance in the distributed system.")
-	fmt.Print("Enter NODE_ID: ")
-
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-
-	nodeID, err := strconv.ParseInt(input, 10, 64)
-	if err != nil || nodeID < 0 || nodeID > vfMaxNodeID {
-		fmt.Printf("Invalid NODE_ID. Must be between 0 and %d.\n", vfMaxNodeID)
-		os.Exit(1)
-	}
-
-	return nodeID, nil
-}
-
 func promptInteractiveS3() (string, error) {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("S3_URL is not configured.")
@@ -173,13 +151,13 @@ func promptInteractiveS3() (string, error) {
 	switch input {
 	case "1":
 		fmt.Print("\nEnter S3 connection string (s3://bucket?endpoint=...&region=...&access_key=...&secret_key=...): ")
-		url, _ := reader.ReadString('\n')
-		url = strings.TrimSpace(url)
-		if url == "" {
+		inputURL, _ := reader.ReadString('\n')
+		inputURL = strings.TrimSpace(inputURL)
+		if inputURL == "" {
 			fmt.Println("Empty URL. S3 will be disabled.")
 			return "", nil
 		}
-		return url, nil
+		return inputURL, nil
 	case "2":
 		fmt.Println("S3 storage disabled. File upload will be disabled.")
 		return "", nil
@@ -211,12 +189,12 @@ func promptInteractiveDatabase() (string, error) {
 		return "postgres://localhost:5432/vortex?sslmode=disable", nil
 	case "2":
 		fmt.Print("\nEnter database connection string: ")
-		url, _ := reader.ReadString('\n')
-		url = strings.TrimSpace(url)
-		if url == "" {
+		inputURL, _ := reader.ReadString('\n')
+		inputURL = strings.TrimSpace(inputURL)
+		if inputURL == "" {
 			return "", fmt.Errorf("empty database URL")
 		}
-		return url, nil
+		return inputURL, nil
 	case "3":
 		fmt.Println("Exiting. Please set DATABASE_URL environment variable and restart.")
 		os.Exit(0)
@@ -226,60 +204,6 @@ func promptInteractiveDatabase() (string, error) {
 		os.Exit(1)
 		return "", nil
 	}
-}
-
-func promptSaveToEnv(jwtSecret, databaseURL, s3URL string, nodeID int64) bool {
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("\nConfiguration complete!")
-	fmt.Println("Would you like to save these settings to .env file for future use?")
-	fmt.Println("  1. Yes, save to .env (recommended)")
-	fmt.Println("  2. No, use for this session only")
-	fmt.Print("Choose [1-2]: ")
-
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-
-	if input != "1" {
-		return false
-	}
-
-	content := fmt.Sprintf(`# Vortex Configuration
-# Generated automatically - DO NOT commit to version control with sensitive values
-
-# Node ID (0-%d) - uniquely identifies this server instance
-NODE_ID=%d
-
-# JWT Secret - keep this secure!
-JWT_SECRET=%s
-
-# Database connection string
-DATABASE_URL=%s
-
-# S3 connection string (leave empty to disable file storage)
-S3_URL=%s
-
-# Optional configurations (uncomment to customize)
-# PORT=:8080
-# DB_MAX_OPEN_CONNS=50
-# DB_MAX_IDLE_CONNS=20
-# JWT_ISSUER=vortex
-# JWT_EXPIRES_MINUTES=10080
-# BCRYPT_COST=10
-# MESSAGE_RECALL_WINDOW_MS=120000
-# MESSAGE_RETENTION_DAYS=7
-# DEFAULT_PAGE_SIZE=100
-# MAX_PAGE_SIZE=500
-`, vfMaxNodeID, nodeID, jwtSecret, databaseURL, s3URL)
-
-	if err := os.WriteFile(".env", []byte(content), 0600); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to save .env file: %v\n", err)
-		fmt.Println("Configuration will not be persisted.")
-		return false
-	}
-
-	fmt.Println("\nConfiguration saved to .env file!")
-	fmt.Println("Note: Add .env to your .gitignore to protect sensitive values.")
-	return true
 }
 
 type S3Config struct {
@@ -346,6 +270,10 @@ func (cfg *Config) Validate() error {
 	if cfg.Port == "" {
 		return fmt.Errorf("PORT is required")
 	}
+	portStr := strings.TrimPrefix(cfg.Port, ":")
+	if portNum, err := strconv.Atoi(portStr); err != nil || portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("PORT must be a valid port number (1-65535), got: %s", portStr)
+	}
 	if cfg.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
@@ -368,19 +296,6 @@ func (cfg *Config) Validate() error {
 }
 
 func LoadConfig() *Config {
-	nodeID := envInt64("NODE_ID", -1)
-	needInteractiveConfig := false
-
-	if nodeID < 0 {
-		var err error
-		nodeID, err = promptInteractiveNodeID()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		needInteractiveConfig = true
-	}
-
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		var err error
@@ -389,7 +304,6 @@ func LoadConfig() *Config {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		needInteractiveConfig = true
 	}
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -400,7 +314,6 @@ func LoadConfig() *Config {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		needInteractiveConfig = true
 	}
 
 	s3URL := os.Getenv("S3_URL")
@@ -411,21 +324,16 @@ func LoadConfig() *Config {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		needInteractiveConfig = true
-	}
-
-	if needInteractiveConfig {
-		promptSaveToEnv(jwtSecret, databaseURL, s3URL, nodeID)
 	}
 
 	cfg := &Config{
-		// required config
-		NodeID:      nodeID,
+		// 必要配置
+		NodeID:      envInt64("NODE_ID", -1),
 		Port:        envString("PORT", ":8080"),
 		DatabaseURL: databaseURL,
 		JWTSecret:   jwtSecret,
 
-		// optional (use default values, can be overridden by env vars)	
+		// 可选配置（使用默认值，可通过环境变量覆盖）
 		DBMaxOpenConns:                       envInt("DB_MAX_OPEN_CONNS", defaultDBMaxOpenConns),
 		DBMaxIdleConns:                       envInt("DB_MAX_IDLE_CONNS", defaultDBMaxIdleConns),
 		JWTIssuer:                            envString("JWT_ISSUER", defaultJWTIssuer),
@@ -444,11 +352,12 @@ func LoadConfig() *Config {
 		WorkerMaintenanceInitialDelayMinutes: envInt("WORKER_MAINTENANCE_INITIAL_DELAY_MINUTES", defaultMaintenanceDelay),
 		WorkerMaintenanceIntervalHours:       envInt("WORKER_MAINTENANCE_INTERVAL_HOURS", defaultMaintenanceInterval),
 
-		// S3 (optional, can be left empty to disable)
+		// S3 配置
 		S3URL: s3URL,
 	}
 
-	if cfg.Port != "" && cfg.Port[0] != ':' {
+	// 自动添加端口号冒号前缀
+	if cfg.Port != "" && !strings.HasPrefix(cfg.Port, ":") {
 		cfg.Port = ":" + cfg.Port
 	}
 

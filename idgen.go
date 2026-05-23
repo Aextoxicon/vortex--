@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,10 +63,12 @@ func NewIdGenerator(cfg *Config, idGenSt *IdGeneratorStateStore, msgSt *MessageS
 func (g *IdGenerator) Init() {
 	g.initOnce.Do(func() {
 		if err := g.initFromDB(); err != nil {
-			slog.Warn("id generator init warning", "error", err)
+			slog.Error("id generator init from db failed", "error", err)
+			os.Exit(1)
 		}
 		if err := g.fetchNewSegment(context.Background()); err != nil {
 			slog.Error("id generator first segment fetch failed", "error", err)
+			os.Exit(1)
 		}
 		close(g.initDone)
 	})

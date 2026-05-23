@@ -84,6 +84,15 @@ func (h *Handler) ReadinessCheck(c *gin.Context) {
 		})
 		return
 	}
+
+	if h.cfg.S3URL != "" && h.svc.s3Service == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "not ready",
+			"reason": "S3 service unavailable",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "ready",
 		"node_id":   h.cfg.NodeID,

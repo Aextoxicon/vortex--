@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,6 +37,12 @@ func main() {
 	PrintStartupInfo()
 	cfg := LoadConfig()
 
+	slog.Info("configuration loaded",
+		"node_id", cfg.NodeID,
+		"port", cfg.Port,
+		"s3_enabled", cfg.S3URL != "",
+	)
+
 	db, err := initDB(cfg)
 	if err != nil {
 		slog.Error("failed to init database", "error", err)
@@ -50,7 +57,8 @@ func main() {
 
 	store := NewStore(db, cfg.EpochTime)
 	rateLimiter := NewRateLimiter()
-	rateLimiter.StartCleanup(time.Minute, 5*time.Minute)
+	// 错峰启动：RateLimiter 清理间隔 1 分钟，随机延迟 0-30 秒启动
+	rateLimiter.StartCleanup(time.Minute+time.Duration(rand.Intn(30))*time.Second, 5*time.Minute)
 
 	userStore := &UserStore{Store: store}
 	msgStore := &MessageStore{Store: store}
@@ -68,12 +76,13 @@ func main() {
 	if cfg.S3URL != "" {
 		s3Cfg, err := ParseS3URL(cfg.S3URL)
 		if err != nil {
-			slog.Warn("failed to parse S3 URL, file upload will be disabled", "error", err)
-		} else {
-			s3Service, err = NewS3Service(context.Background(), s3Cfg.Bucket, s3Cfg.Region, s3Cfg.Endpoint, s3Cfg.AccessKey, s3Cfg.SecretKey)
-			if err != nil {
-				slog.Warn("failed to init S3 service, file upload will be disabled", "error", err)
-			}
+			slog.Error("failed to parse S3 URL", "error", err)
+			os.Exit(1)
+		}
+		s3Service, err = NewS3Service(context.Background(), s3Cfg.Bucket, s3Cfg.Region, s3Cfg.Endpoint, s3Cfg.AccessKey, s3Cfg.SecretKey)
+		if err != nil {
+			slog.Error("failed to init S3 service", "error", err)
+			os.Exit(1)
 		}
 	}
 
@@ -105,8 +114,20 @@ func main() {
 
 	worker := NewWorker(cfg, svc, msgStore)
 	// 在启动 Worker 之前，先同步创建分区表，确保立即可用
-	if err := worker.CreateTablesFromTodayToSundayWithError(); err != nil {
-		slog.Error("failed to create initial partition tables", "error", err)
+	// 添加重试机制，避免临时性错误（如网络抖动）导致启动失败
+	var createErr error
+	for i := 0; i < 3; i++ {
+		createErr = worker.CreateTablesFromTodayToSundayWithError()
+		if createErr == nil {
+			break
+		}
+		if i < 2 {
+			slog.Warn("failed to create partition tables, retrying...", "error", createErr, "attempt", i+1)
+			time.Sleep(time.Duration(i+1) * time.Second)
+		}
+	}
+	if createErr != nil {
+		slog.Error("failed to create initial partition tables after retries", "error", createErr)
 		os.Exit(1)
 	}
 	worker.Start()
@@ -124,16 +145,29 @@ func main() {
 	go func() {
 		<-quit
 		<-quit
-		slog.Warn("forced exit")
+		slog.Warn("forced exit, skipping graceful shutdown")
 		os.Exit(1)
 	}()
 
 	<-quit
 	slog.Info("shutting down...")
 
-	worker.Stop()
-	rateLimiter.Stop()
-	jwtService.Stop()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopCancel()
+
+	done := make(chan struct{})
+	go func() {
+		worker.Stop()
+		rateLimiter.Stop()
+		jwtService.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-stopCtx.Done():
+		slog.Warn("cleanup timed out, proceeding with server shutdown")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

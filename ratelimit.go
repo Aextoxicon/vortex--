@@ -15,8 +15,9 @@ type rateLimiterShard struct {
 }
 
 type RateLimiter struct {
-	shards [rateLimiterShards]*rateLimiterShard
-	stopCh chan struct{}
+	shards    [rateLimiterShards]*rateLimiterShard
+	stopCh    chan struct{}
+	closeOnce sync.Once
 }
 
 func NewRateLimiter() *RateLimiter {
@@ -54,7 +55,7 @@ func (r *RateLimiter) StartCleanup(interval, ttl time.Duration) {
 }
 
 func (r *RateLimiter) Stop() {
-	close(r.stopCh)
+	r.closeOnce.Do(func() { close(r.stopCh) })
 }
 
 func (r *RateLimiter) AllowRequest(publicID string) bool {

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -27,6 +28,8 @@ type JwtService struct {
 	blacklistMu      sync.RWMutex
 	blacklistCache   map[string]int64
 	stopCh           chan struct{}
+	closeOnce        sync.Once
+	wg               sync.WaitGroup
 }
 
 func NewJwtService(db *sql.DB, secret, issuer string, expiresInMinutes int) *JwtService {
@@ -45,6 +48,7 @@ func NewJwtService(db *sql.DB, secret, issuer string, expiresInMinutes int) *Jwt
 func (j *JwtService) loadBlacklistFromDB() {
 	rows, err := j.db.Query(`SELECT jti, expires_at FROM jwt_blacklist`)
 	if err != nil {
+		slog.Warn("failed to load blacklist from database, cache will be empty", "error", err)
 		return
 	}
 	defer rows.Close()
@@ -120,7 +124,9 @@ func (j *JwtService) CleanupBlacklist() {
 		j.blacklistMu.Unlock()
 
 		// 第3步：异步清理数据库（慢操作，不阻塞）
+		j.wg.Add(1)
 		go func(items []string) {
+			defer j.wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
@@ -153,7 +159,10 @@ func (j *JwtService) StartCleanup(interval time.Duration) {
 }
 
 func (j *JwtService) Stop() {
-	close(j.stopCh)
+	j.closeOnce.Do(func() {
+		close(j.stopCh)
+		j.wg.Wait()
+	})
 }
 
 func (j *JwtService) GenerateToken(user *User) (string, error) {
