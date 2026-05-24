@@ -1,35 +1,17 @@
-# ==================== Go ====================
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-*.test.exe
-*.o
-*.a
-
-# Dependency directories
-vendor/
-
-# Go workspace file
-go.work
-go.work.sum
-
+# ==================== Rust ====================
 # Build output
-bin/
-build/
-dist/
-tmp/
+target/*
+
+# Cargo.lock (uncomment if building a library)
+# Cargo.lock
 
 # IDE / Editor
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
+.vscode/
+*.code-workspace
 
 # ==================== Windows ====================
 # Windows image file caches
@@ -73,7 +55,6 @@ Icon
 .Trashes
 .VolumeIcon.icns
 .com.apple.timemachine.donotpresent
-.DS_Store
 
 # Directories potentially created on remote AFP share
 .AppleDB
@@ -104,5 +85,4 @@ logs/
 coverage/
 *.coverage
 *.coverage.xml
-vortex
 *.txt
