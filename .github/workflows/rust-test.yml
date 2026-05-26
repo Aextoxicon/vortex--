@@ -44,10 +44,10 @@ jobs:
           key: ${{ runner.os }}-lint-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Check formatting
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy -- -D warnings -A dead_code -A unused_comparisons
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Verify dependencies
         run: |
