@@ -1,6 +1,6 @@
 use crate::config::Config;
-use crate::store::MessageStore;
-use chrono::{Datelike, Duration, NaiveDate, Timelike, Utc};
+use crate::store::{MessageIdempotencyStore, MessageStore};
+use chrono::{Datelike, Duration, NaiveDate, Utc};
 use sqlx::PgPool;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,16 +11,18 @@ pub struct Worker {
     cfg: Config,
     pool: PgPool,
     msg_store: MessageStore,
+    idempotency_store: MessageIdempotencyStore,
     stop_flag: Arc<AtomicBool>,
     started: Arc<Mutex<bool>>,
 }
 
 impl Worker {
-    pub fn new(cfg: Config, pool: PgPool, msg_store: MessageStore) -> Self {
+    pub fn new(cfg: Config, pool: PgPool, msg_store: MessageStore, idempotency_store: MessageIdempotencyStore) -> Self {
         Self {
             cfg,
             pool,
             msg_store,
+            idempotency_store,
             stop_flag: Arc::new(AtomicBool::new(false)),
             started: Arc::new(Mutex::new(false)),
         }
@@ -52,6 +54,14 @@ impl Worker {
             run_maintenance(stop_flag.clone(), pool.clone(), msg_store.clone(), cfg.clone()).await;
         });
 
+        let stop_flag = self.stop_flag.clone();
+        let idempotency_store = self.idempotency_store.clone();
+        let cfg = self.cfg.clone();
+
+        tokio::spawn(async move {
+            run_idempotency_cleanup(stop_flag.clone(), idempotency_store, cfg.clone()).await;
+        });
+
         tracing::info!("Worker started");
     }
 
@@ -67,7 +77,7 @@ impl Worker {
         tracing::info!("Worker stopped");
     }
 
-    pub fn create_tables_from_today_to_sunday(&self) {
+    pub async fn create_tables_from_today_to_sunday(&self) {
         let now = Utc::now();
         let day_of_week = now.weekday().num_days_from_sunday();
         let days_to_sunday = if day_of_week == 0 { 0 } else { 7 - day_of_week as i32 };
@@ -75,14 +85,14 @@ impl Worker {
         for offset in 0..=days_to_sunday {
             let date = now + Duration::days(offset as i64);
             let table_name = message_table_name_by_date(date);
-            if let Err(e) = self.msg_store.ensure_partition(&table_name) {
+            if let Err(e) = self.msg_store.ensure_partition(&table_name).await {
                 tracing::error!("failed to create table: table={} error={}", table_name, e);
             }
         }
         tracing::info!("initial message tables created");
     }
 
-    pub fn create_tables_from_today_to_sunday_with_error(&self) -> Result<(), String> {
+    pub async fn create_tables_from_today_to_sunday_with_error(&self) -> Result<(), String> {
         let now = Utc::now();
         let day_of_week = now.weekday().num_days_from_sunday();
         let days_to_sunday = if day_of_week == 0 { 0 } else { 7 - day_of_week as i32 };
@@ -91,7 +101,7 @@ impl Worker {
         for offset in 0..=days_to_sunday {
             let date = now + Duration::days(offset as i64);
             let table_name = message_table_name_by_date(date);
-            if let Err(e) = self.msg_store.ensure_partition(&table_name) {
+            if let Err(e) = self.msg_store.ensure_partition(&table_name).await {
                 tracing::error!("failed to create table: table={} error={}", table_name, e);
                 last_err = Some(e);
             }
@@ -99,7 +109,7 @@ impl Worker {
         tracing::info!("initial message tables created");
 
         if let Some(e) = last_err {
-            Err(e)
+            Err(e.to_string())
         } else {
             Ok(())
         }
@@ -113,7 +123,7 @@ async fn run_table_manager(
     cfg: Config,
 ) {
     let next_monday = calculate_next_monday_delay();
-    let delay = TokioDuration::from_secs(next_monday.as_secs());
+    let delay = TokioDuration::from_secs(next_monday.num_seconds().max(0) as u64);
 
     tokio::select! {
         _ = sleep(delay) => {}
@@ -125,7 +135,7 @@ async fn run_table_manager(
     }
 
     let interval_hours = cfg.worker_table_create_interval_hours;
-    let mut ticker = interval(TokioDuration::from_secs(interval_hours * 3600));
+    let mut ticker = interval(TokioDuration::from_secs((interval_hours as u64) * 3600));
 
     loop {
         ticker.tick().await;
@@ -143,7 +153,7 @@ async fn run_maintenance(
     cfg: Config,
 ) {
     let initial_delay = cfg.worker_maintenance_initial_delay_minutes;
-    let delay = TokioDuration::from_secs(initial_delay * 60);
+    let delay = TokioDuration::from_secs((initial_delay as u64) * 60);
 
     tokio::select! {
         _ = sleep(delay) => {}
@@ -155,7 +165,7 @@ async fn run_maintenance(
     }
 
     let interval_hours = cfg.worker_maintenance_interval_hours;
-    let mut ticker = interval(TokioDuration::from_secs(interval_hours * 3600));
+    let mut ticker = interval(TokioDuration::from_secs((interval_hours as u64) * 3600));
 
     loop {
         ticker.tick().await;
@@ -171,6 +181,39 @@ async fn run_analyze(pool: &PgPool) {
     match sqlx::query("ANALYZE messages").execute(pool).await {
         Ok(_) => tracing::info!("maintenance: ANALYZE completed"),
         Err(e) => tracing::error!("maintenance: ANALYZE failed: error={}", e),
+    }
+}
+
+async fn run_idempotency_cleanup(
+    stop_flag: Arc<AtomicBool>,
+    idempotency_store: MessageIdempotencyStore,
+    cfg: Config,
+) {
+    let initial_delay = cfg.worker_maintenance_initial_delay_minutes;
+    let delay = TokioDuration::from_secs((initial_delay as u64) * 60);
+
+    tokio::select! {
+        _ = sleep(delay) => {}
+        _ = async {
+            while !stop_flag.load(Ordering::SeqCst) {
+                tokio::time::sleep(TokioDuration::from_millis(100)).await;
+            }
+        } => return,
+    }
+
+    let interval_hours = cfg.worker_maintenance_interval_hours;
+    let mut ticker = interval(TokioDuration::from_secs((interval_hours as u64) * 3600));
+
+    loop {
+        ticker.tick().await;
+        if stop_flag.load(Ordering::SeqCst) {
+            return;
+        }
+        let retention_ms = cfg.idempotency_retention_hours * 3600 * 1000;
+        match idempotency_store.delete_stale(retention_ms).await {
+            Ok(count) => tracing::info!("maintenance: cleaned up {} stale idempotency records", count),
+            Err(e) => tracing::error!("maintenance: idempotency cleanup failed: error={}", e),
+        }
     }
 }
 
@@ -222,7 +265,7 @@ async fn drop_expired_partitions(pool: &PgPool, _msg_store: &MessageStore, reten
     tracing::info!("maintenance: drop expired partitions completed");
 }
 
-async fn create_week_tables(pool: &PgPool, msg_store: &MessageStore) {
+async fn create_week_tables(_pool: &PgPool, msg_store: &MessageStore) {
     let now = Utc::now();
     let weekday = now.weekday().num_days_from_sunday();
     let weekday = if weekday == 0 { 7 } else { weekday as i32 };
@@ -231,20 +274,25 @@ async fn create_week_tables(pool: &PgPool, msg_store: &MessageStore) {
     for offset in 0..7 {
         let date = next_monday + Duration::days(offset as i64);
         let table_name = message_table_name_by_date(date);
-        if let Err(e) = msg_store.ensure_partition(&table_name) {
+        if let Err(e) = msg_store.ensure_partition(&table_name).await {
             tracing::error!("failed to create table: table={} error={}", table_name, e);
         }
     }
     tracing::info!("weekly message tables created");
 }
 
-fn calculate_next_monday_delay() -> Duration {
+pub fn calculate_next_monday_delay() -> Duration {
     let now = Utc::now();
     let days_until_monday = (8 - now.weekday().num_days_from_sunday() as i32) % 7;
     let days_until_monday = if days_until_monday == 0 { 7 } else { days_until_monday };
     let next_monday = now.date_naive() + Duration::days(days_until_monday as i64);
     let next_monday_utc = next_monday.and_hms_opt(0, 0, 0).unwrap().and_utc();
     next_monday_utc - now
+}
+
+pub fn calculate_days_to_sunday(date: chrono::NaiveDate) -> i32 {
+    let dow = date.weekday().num_days_from_sunday() as i32;
+    (7 - dow) % 7
 }
 
 pub fn message_table_name_by_date(date: chrono::DateTime<Utc>) -> String {

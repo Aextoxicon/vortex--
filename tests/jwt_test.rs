@@ -1,7 +1,7 @@
 mod test_utils;
 
 use test_utils::TestFixture;
-use vortex--::jwt;
+use vortex__::jwt;
 
 async fn setup_jwt_service() -> (TestFixture, jwt::JwtService) {
     let fixture = TestFixture::new().await;
@@ -52,7 +52,7 @@ async fn test_blacklist_token() {
     let token = jwt_service.generate_token(user_id, public_id, username).unwrap();
     let claims = jwt_service.validate_token(&token).unwrap();
     
-    jwt_service.blacklist_token(&claims.jti).unwrap();
+    jwt_service.blacklist_token(&claims.jti, claims.exp).await.unwrap();
     
     assert!(jwt_service.is_blacklisted(&claims.jti));
     
@@ -68,7 +68,7 @@ async fn test_token_expiration() {
         fixture.pool.clone(),
         "test-secret-key-min-32-chars-long!!",
         "test-issuer",
-        0,
+        -60,
     );
     
     let user_id = 1;

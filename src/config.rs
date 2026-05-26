@@ -1,7 +1,9 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::env;
-use std::fmt;
+use std::fs;
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 use std::process;
 use url::Url;
 
@@ -22,6 +24,7 @@ const DEFAULT_MAINTENANCE_DELAY: i32 = 5;
 const DEFAULT_MAINTENANCE_INTERVAL: i32 = 24;
 const DEFAULT_DB_MAX_OPEN_CONNS: i32 = 50;
 const DEFAULT_DB_MAX_IDLE_CONNS: i32 = 20;
+const DEFAULT_IDEMPOTENCY_RETENTION_HOURS: i64 = 24;
 
 const VF_MAX_NODE_ID: i64 = (1 << 5) - 1;
 
@@ -34,7 +37,7 @@ pub struct Config {
     pub db_max_open_conns: i32,
     pub db_max_idle_conns: i32,
     pub jwt_issuer: String,
-    pub jwt_expires_minutes: i32,
+    pub jwt_expires_minutes: i64,
     pub bcrypt_cost: i32,
     pub message_recall_window_ms: i64,
     pub epoch_time: i64,
@@ -45,9 +48,10 @@ pub struct Config {
     pub max_page_size: i32,
     pub public_id_length: i32,
     pub group_id_random_length: i32,
-    pub worker_table_create_interval_hours: i32,
-    pub worker_maintenance_initial_delay_minutes: i32,
-    pub worker_maintenance_interval_hours: i32,
+    pub worker_table_create_interval_hours: i64,
+    pub worker_maintenance_initial_delay_minutes: i64,
+    pub worker_maintenance_interval_hours: i64,
+    pub idempotency_retention_hours: i64,
     pub s3_url: String,
 }
 
@@ -60,14 +64,52 @@ pub struct S3Config {
     pub secret_key: String,
 }
 
-fn env_string(key: &str, fallback: &str) -> String {
+fn load_dotenv_map() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let dotenv_path = Path::new(".env");
+    if !dotenv_path.exists() {
+        return map;
+    }
+    let content = match fs::read_to_string(dotenv_path) {
+        Ok(c) => c,
+        Err(_) => return map,
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(eq_pos) = line.find('=') {
+            let key = line[..eq_pos].trim().to_string();
+            let value = line[eq_pos + 1..].trim().to_string();
+            if !key.is_empty() {
+                map.insert(key, value);
+            }
+        }
+    }
+    map
+}
+
+fn env_string(dotenv_map: &HashMap<String, String>, key: &str, fallback: &str) -> String {
+    if let Some(v) = dotenv_map.get(key) && !v.is_empty() {
+        return v.clone();
+    }
     match env::var(key) {
         Ok(v) if !v.is_empty() => v,
         _ => fallback.to_string(),
     }
 }
 
-fn env_int(key: &str, fallback: i32) -> i32 {
+fn env_int(dotenv_map: &HashMap<String, String>, key: &str, fallback: i32) -> i32 {
+    if let Some(v) = dotenv_map.get(key) && !v.is_empty() {
+        match v.parse::<i32>() {
+            Ok(n) => return n,
+            Err(_) => {
+                eprintln!("Error: invalid value for {} in .env: {}", key, v);
+                process::exit(1);
+            }
+        }
+    }
     match env::var(key) {
         Ok(v) if !v.is_empty() => match v.parse::<i32>() {
             Ok(n) => n,
@@ -80,7 +122,16 @@ fn env_int(key: &str, fallback: i32) -> i32 {
     }
 }
 
-fn env_int64(key: &str, fallback: i64) -> i64 {
+fn env_int64(dotenv_map: &HashMap<String, String>, key: &str, fallback: i64) -> i64 {
+    if let Some(v) = dotenv_map.get(key) && !v.is_empty() {
+        match v.parse::<i64>() {
+            Ok(n) => return n,
+            Err(_) => {
+                eprintln!("Error: invalid value for {} in .env: {}", key, v);
+                process::exit(1);
+            }
+        }
+    }
     match env::var(key) {
         Ok(v) if !v.is_empty() => match v.parse::<i64>() {
             Ok(n) => n,
@@ -97,7 +148,7 @@ fn generate_jwt_secret() -> Result<String, String> {
     use rand::RngCore;
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
-    Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes))
+    Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes))
 }
 
 fn prompt_interactive_jwt() -> Result<String, String> {
@@ -297,7 +348,7 @@ impl Config {
         }
         let port_str = self.port.trim_start_matches(':');
         match port_str.parse::<u16>() {
-            Ok(port_num) if port_num >= 1 && port_num <= 65535 => {}
+            Ok(port_num) if port_num >= 1 => {}
             _ => {
                 return Err(format!(
                     "PORT must be a valid port number (1-65535), got: {}",
@@ -328,72 +379,92 @@ impl Config {
 }
 
 pub fn load_config() -> Config {
-    let jwt_secret = match env::var("JWT_SECRET") {
-        Ok(v) if !v.is_empty() => v,
-        _ => match prompt_interactive_jwt() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                process::exit(1);
-            }
+    let dotenv_map = load_dotenv_map();
+
+    let jwt_secret = match dotenv_map.get("JWT_SECRET") {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => match env::var("JWT_SECRET") {
+            Ok(v) if !v.is_empty() => v,
+            _ => match prompt_interactive_jwt() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
+            },
         },
     };
 
-    let database_url = match env::var("DATABASE_URL") {
-        Ok(v) if !v.is_empty() => v,
-        _ => match prompt_interactive_database() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                process::exit(1);
-            }
+    let database_url = match dotenv_map.get("DATABASE_URL") {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => match env::var("DATABASE_URL") {
+            Ok(v) if !v.is_empty() => v,
+            _ => match prompt_interactive_database() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
+            },
         },
     };
 
-    let s3_url = match env::var("S3_URL") {
-        Ok(v) if !v.is_empty() => v,
-        _ => match prompt_interactive_s3() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                process::exit(1);
-            }
+    let s3_url = match dotenv_map.get("S3_URL") {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => match env::var("S3_URL") {
+            Ok(v) if !v.is_empty() => v,
+            _ => match prompt_interactive_s3() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
+            },
         },
     };
 
     let mut cfg = Config {
-        node_id: env_int64("NODE_ID", -1),
-        port: env_string("PORT", ":8080"),
+        node_id: env_int64(&dotenv_map, "NODE_ID", -1),
+        port: env_string(&dotenv_map, "PORT", ":8080"),
         database_url,
         jwt_secret,
-        db_max_open_conns: env_int("DB_MAX_OPEN_CONNS", DEFAULT_DB_MAX_OPEN_CONNS),
-        db_max_idle_conns: env_int("DB_MAX_IDLE_CONNS", DEFAULT_DB_MAX_IDLE_CONNS),
-        jwt_issuer: env_string("JWT_ISSUER", DEFAULT_JWT_ISSUER),
-        jwt_expires_minutes: env_int("JWT_EXPIRES_MINUTES", DEFAULT_JWT_EXPIRES_MINUTES),
-        bcrypt_cost: env_int("BCRYPT_COST", DEFAULT_BCRYPT_COST),
+        db_max_open_conns: env_int(&dotenv_map, "DB_MAX_OPEN_CONNS", DEFAULT_DB_MAX_OPEN_CONNS),
+        db_max_idle_conns: env_int(&dotenv_map, "DB_MAX_IDLE_CONNS", DEFAULT_DB_MAX_IDLE_CONNS),
+        jwt_issuer: env_string(&dotenv_map, "JWT_ISSUER", DEFAULT_JWT_ISSUER),
+        jwt_expires_minutes: env_int64(&dotenv_map, "JWT_EXPIRES_MINUTES", DEFAULT_JWT_EXPIRES_MINUTES as i64),
+        bcrypt_cost: env_int(&dotenv_map, "BCRYPT_COST", DEFAULT_BCRYPT_COST),
         message_recall_window_ms: env_int64(
+            &dotenv_map,
             "MESSAGE_RECALL_WINDOW_MS",
             DEFAULT_MESSAGE_RECALL_WINDOW_MS,
         ),
-        epoch_time: env_int64("EPOCH_TIME", DEFAULT_EPOCH_TIME),
-        segment_duration_ms: env_int64("ID_SEGMENT_DURATION_MS", DEFAULT_SEGMENT_DURATION_MS),
-        segment_size: env_int64("ID_SEGMENT_SIZE", DEFAULT_SEGMENT_SIZE),
-        message_retention_days: env_int("MESSAGE_RETENTION_DAYS", DEFAULT_MESSAGE_RETENTION_DAYS),
-        default_page_size: env_int("DEFAULT_PAGE_SIZE", DEFAULT_PAGE_SIZE),
-        max_page_size: env_int("MAX_PAGE_SIZE", DEFAULT_MAX_PAGE_SIZE),
-        public_id_length: env_int("PUBLIC_ID_LENGTH", DEFAULT_PUBLIC_ID_LENGTH),
-        group_id_random_length: env_int("GROUP_ID_RANDOM_LENGTH", DEFAULT_GROUP_ID_RANDOM_LENGTH),
-        worker_table_create_interval_hours: env_int(
+        epoch_time: env_int64(&dotenv_map, "EPOCH_TIME", DEFAULT_EPOCH_TIME),
+        segment_duration_ms: env_int64(&dotenv_map, "ID_SEGMENT_DURATION_MS", DEFAULT_SEGMENT_DURATION_MS),
+        segment_size: env_int64(&dotenv_map, "ID_SEGMENT_SIZE", DEFAULT_SEGMENT_SIZE),
+        message_retention_days: env_int(&dotenv_map, "MESSAGE_RETENTION_DAYS", DEFAULT_MESSAGE_RETENTION_DAYS),
+        default_page_size: env_int(&dotenv_map, "DEFAULT_PAGE_SIZE", DEFAULT_PAGE_SIZE),
+        max_page_size: env_int(&dotenv_map, "MAX_PAGE_SIZE", DEFAULT_MAX_PAGE_SIZE),
+        public_id_length: env_int(&dotenv_map, "PUBLIC_ID_LENGTH", DEFAULT_PUBLIC_ID_LENGTH),
+        group_id_random_length: env_int(&dotenv_map, "GROUP_ID_RANDOM_LENGTH", DEFAULT_GROUP_ID_RANDOM_LENGTH),
+        worker_table_create_interval_hours: env_int64(
+            &dotenv_map,
             "WORKER_TABLE_CREATE_INTERVAL_HOURS",
-            DEFAULT_WORKER_CREATE_INTERVAL,
+            DEFAULT_WORKER_CREATE_INTERVAL as i64,
         ),
-        worker_maintenance_initial_delay_minutes: env_int(
+        worker_maintenance_initial_delay_minutes: env_int64(
+            &dotenv_map,
             "WORKER_MAINTENANCE_INITIAL_DELAY_MINUTES",
-            DEFAULT_MAINTENANCE_DELAY,
+            DEFAULT_MAINTENANCE_DELAY as i64,
         ),
-        worker_maintenance_interval_hours: env_int(
+        worker_maintenance_interval_hours: env_int64(
+            &dotenv_map,
             "WORKER_MAINTENANCE_INTERVAL_HOURS",
-            DEFAULT_MAINTENANCE_INTERVAL,
+            DEFAULT_MAINTENANCE_INTERVAL as i64,
+        ),
+        idempotency_retention_hours: env_int64(
+            &dotenv_map,
+            "IDEMPOTENCY_RETENTION_HOURS",
+            DEFAULT_IDEMPOTENCY_RETENTION_HOURS,
         ),
         s3_url,
     };

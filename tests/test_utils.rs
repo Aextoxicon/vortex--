@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use sqlx::PgPool;
 use std::sync::atomic::{AtomicI64, Ordering};
 use testcontainers::runners::AsyncRunner;
@@ -31,7 +33,7 @@ impl TestFixture {
             .await
             .expect("failed to connect to test database");
         
-        crate::migration::run_migrations(&pool)
+        vortex__::migration::run_migrations(&pool)
             .await
             .expect("failed to run migrations");
         

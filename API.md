@@ -42,6 +42,7 @@
 - [健康检查](#健康检查)
   - [健康检查](#健康检查端点)
   - [就绪检查](#就绪检查)
+  - [运行时指标](#运行时指标)
 
 ---
 
@@ -321,11 +322,11 @@ POST /api/messages/send
 
 # 获取消息
 
-获取会话中的消息列表。
+获取会话中的消息列表。支持分页查询和游标查询两种模式。
 
 **请求**
 ```
-GET /api/messages?conv_id=<conv_id>&page=<page>&page_size=<page_size>
+GET /api/messages?conv_id=<conv_id>&lastMsgId=<last_msg_id>&page_size=<page_size>
 ```
 
 **认证**: 需要 Bearer Token
@@ -334,10 +335,30 @@ GET /api/messages?conv_id=<conv_id>&page=<page>&page_size=<page_size>
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | conv_id | string | 是 | - | 会话ID |
-| page | int | 否 | 1 | 页码 |
+| lastMsgId | int | 否 | - | 游标模式：只返回 `msg_id > lastMsgId` 的消息（与 `page` 互斥） |
+| page | int | 否 | 1 | 分页模式：页码（与 `lastMsgId` 互斥） |
 | page_size | int | 否 | 100 | 每页数量（最大500） |
 
-**响应 200 OK**
+**游标模式响应 200 OK**（使用了 `lastMsgId` 时）
+```json
+{
+  "messages": [
+    {
+      "id": "msg_xyz789",
+      "conv_id": "conv_abc123",
+      "sender_id": "abc123XYZ",
+      "content": "Hello!",
+      "content_type": "text",
+      "created_at": "2026-05-14T12:00:00Z"
+    }
+  ],
+  "page_size": 100,
+  "has_more": true,
+  "last_msg_id": 12345
+}
+```
+
+**分页模式响应 200 OK**（使用了 `page` 时）
 ```json
 {
   "messages": [
@@ -390,30 +411,43 @@ POST /api/messages/recall/:msgId
 
 # 检查新消息
 
-检查是否有新消息。
+检查是否有新消息。支持传入客户端已知的最大消息ID，仅返回增量状态。
 
 **请求**
 ```
-GET /api/check
+GET /api/check?lastMsgId=<last_msg_id>
 ```
 
 **认证**: 需要 Bearer Token
 
 **限流**: 3秒1次
 
+**查询参数**
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| lastMsgId | int | 否 | 0 | 客户端已知的最大消息ID，服务端只检查比此ID更新的消息 |
+
+**状态码说明**
+| status | 含义 |
+|--------|------|
+| 0 | 无事发生 |
+| 1 | 有新消息 |
+| 2 | 有好友申请或群组变更 |
+| 3 | 两者都有 |
+
 **响应 200 OK**
 ```json
 {
-  "has_new": true,
-  "unread_count": 5,
-  "conversations": [
-    {
-      "conv_id": "conv_abc123",
-      "unread": 3
-    }
-  ]
+  "status": 1,
+  "updated": ["p_abc123_def456", "g_xyz789"]
 }
 ```
+
+**字段说明**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| status | int | 状态码（见上表） |
+| updated | string[] | 有更新的会话ID列表（仅 status 含 bit 1 时不为空） |
 
 ---
 
@@ -1010,7 +1044,9 @@ GET /health
 **响应 200 OK**
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "node_id": 1,
+  "timestamp": 1715673600000
 }
 ```
 
@@ -1028,14 +1064,42 @@ GET /ready
 **响应 200 OK**
 ```json
 {
-  "status": "ready"
+  "status": "ready",
+  "node_id": 1,
+  "timestamp": 1715673600000
 }
 ```
 
 **响应 503 Service Unavailable**
 ```json
 {
-  "status": "not ready"
+  "status": "not ready",
+  "reason": "database unavailable: connection refused"
+}
+```
+
+---
+
+# 运行时指标
+
+获取服务运行时的基本指标信息。
+
+**请求**
+```
+GET /metrics
+```
+
+**认证**: 不需要
+
+**响应 200 OK**
+```json
+{
+  "pid": 12345,
+  "threads": 8,
+  "memory": {
+    "rss": 52428800,
+    "rss_human": "50.0 MB"
+  }
 }
 ```
 
@@ -1119,6 +1183,10 @@ GET /ready
 
 # 版本历史
 
+- **v1.1** (2026-05-26)
+  - 消息幂等性支持（client_msg_id）
+  - 新增 /metrics 运行时指标端点
+  - 健康检查响应增加 node_id 和 timestamp
 - **v1.0** (2026-05-14)
   - 初始版本
   - 用户认证

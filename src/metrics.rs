@@ -22,7 +22,7 @@ pub fn print_startup_info() {
 
     println!("=== Vortex 启动信息 ===");
     println!("CPU 核心: {}", cpu_count);
-    println!("Rust 版本: {}", rustc_version_runtime::version());
+    println!("Rust 版本: {}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("建议配置:");
 
@@ -40,12 +40,6 @@ pub fn print_startup_info() {
         println!("  - DB_MAX_IDLE_CONNS=20");
     }
     println!();
-}
-
-#[derive(Debug)]
-struct MemoryInfo {
-    resident_set_size_kb: u64,
-    virtual_memory_size_kb: u64,
 }
 
 fn get_memory_info() -> serde_json::Value {

@@ -1,8 +1,10 @@
+use axum::extract::State;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::time;
 
@@ -27,25 +29,23 @@ pub struct JwtService {
     secret: Vec<u8>,
     issuer: String,
     expires_in_minutes: i64,
-    blacklist_cache: HashMap<String, i64>,
-    blacklist_lock: RwLock<()>,
+    blacklist_cache: Arc<RwLock<HashMap<String, i64>>>,
 }
 
 impl JwtService {
     pub fn new(pool: PgPool, secret: &str, issuer: &str, expires_in_minutes: i64) -> Self {
-        let mut service = Self {
+        let service = Self {
             pool,
             secret: secret.as_bytes().to_vec(),
             issuer: issuer.to_string(),
             expires_in_minutes,
-            blacklist_cache: HashMap::new(),
-            blacklist_lock: RwLock::new(()),
+            blacklist_cache: Arc::new(RwLock::new(HashMap::new())),
         };
         service.load_blacklist_from_db();
         service
     }
 
-    fn load_blacklist_from_db(&mut self) {
+    fn load_blacklist_from_db(&self) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(async {
             let query = r#"SELECT jti, expires_at FROM jwt_blacklist"#;
@@ -63,7 +63,7 @@ impl JwtService {
                         cache.insert(jti, expires_at);
                     }
                 }
-                self.blacklist_cache = cache;
+                self.blacklist_cache.write().unwrap().extend(cache);
             }
             Err(e) => {
                 tracing::warn!("failed to load blacklist from database, cache will be empty: {}", e);
@@ -82,24 +82,22 @@ impl JwtService {
             .execute(&self.pool)
             .await?;
 
-        let _lock = self.blacklist_lock.write().unwrap();
-        if self.blacklist_cache.len() >= MAX_BLACKLIST_CACHE_SIZE {
+        let mut cache = self.blacklist_cache.write().unwrap();
+        if cache.len() >= MAX_BLACKLIST_CACHE_SIZE {
             let now = Utc::now().timestamp_millis();
-            self.blacklist_cache.retain(|_, v| *v > now);
+            cache.retain(|_, v| *v > now);
         }
-        self.blacklist_cache.insert(jti.to_string(), expires_at);
+        cache.insert(jti.to_string(), expires_at);
         Ok(())
     }
 
     pub fn is_blacklisted(&self, jti: &str) -> bool {
         let now = Utc::now().timestamp_millis();
-        
-        let read_lock = self.blacklist_lock.read().unwrap();
-        if let Some(&exp) = self.blacklist_cache.get(jti) {
+
+        let mut cache = self.blacklist_cache.write().unwrap();
+        if let Some(&exp) = cache.get(jti) {
             if exp <= now {
-                drop(read_lock);
-                let mut write_lock = self.blacklist_lock.write().unwrap();
-                self.blacklist_cache.remove(jti);
+                cache.remove(jti);
                 false
             } else {
                 true
@@ -113,8 +111,8 @@ impl JwtService {
         let now = Utc::now().timestamp_millis();
 
         let expired_items: Vec<String> = {
-            let _lock = self.blacklist_lock.read().unwrap();
-            self.blacklist_cache
+            let cache = self.blacklist_cache.read().unwrap();
+            cache
                 .iter()
                 .filter(|(_, exp)| **exp < now)
                 .take(1000)
@@ -124,12 +122,10 @@ impl JwtService {
 
         if !expired_items.is_empty() {
             {
-                let mut _lock = self.blacklist_lock.write().unwrap();
+                let mut cache = self.blacklist_cache.write().unwrap();
                 for jti in &expired_items {
-                    if let Some(&exp) = self.blacklist_cache.get(jti) {
-                        if exp < now {
-                            self.blacklist_cache.remove(jti);
-                        }
+                    if let Some(&exp) = cache.get(jti) && exp < now {
+                        cache.remove(jti);
                     }
                 }
             }
@@ -143,10 +139,7 @@ impl JwtService {
                         .execute(&pool)
                         .await;
                 } else {
-                    let query = format!(
-                        r#"DELETE FROM jwt_blacklist WHERE jti = ANY($1)"#,
-                    );
-                    let _ = sqlx::query(&query)
+                    let _ = sqlx::query(r#"DELETE FROM jwt_blacklist WHERE jti = ANY($1)"#)
                         .bind(&items)
                         .execute(&pool)
                         .await;
@@ -195,8 +188,8 @@ impl JwtService {
 
     pub fn validate_token(&self, token_str: &str) -> Result<JwtClaims, String> {
         let mut validation = Validation::default();
-        validation.set_issuer(&[self.issuer.clone()]);
-        validation.set_audience(&[self.issuer.clone()]);
+        validation.set_issuer(std::slice::from_ref(&self.issuer));
+        validation.set_audience(std::slice::from_ref(&self.issuer));
 
         let token_data = decode::<JwtClaims>(
             token_str,
@@ -212,5 +205,50 @@ impl JwtService {
         }
 
         Ok(claims)
+    }
+}
+
+pub async fn auth_middleware(
+    app_state: State<crate::AppState>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let auth_header = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok());
+
+    match auth_header {
+        Some(token) => {
+            let token_str = token.strip_prefix("Bearer ").unwrap_or(token);
+
+            match app_state.jwt_service.validate_token(token_str) {
+                Ok(claims) => {
+                    if app_state.jwt_service.is_blacklisted(&claims.jti) {
+                        return axum::response::Response::builder()
+                            .status(axum::http::StatusCode::UNAUTHORIZED)
+                            .body(axum::body::Body::from("Token is blacklisted"))
+                            .unwrap();
+                    }
+
+                    let mut req = req;
+                    req.extensions_mut().insert(claims.user_id);
+                    req.extensions_mut().insert(claims.public_id);
+                    next.run(req).await
+                }
+                Err(_) => {
+                    axum::response::Response::builder()
+                        .status(axum::http::StatusCode::UNAUTHORIZED)
+                        .body(axum::body::Body::from("Invalid token"))
+                        .unwrap()
+                }
+            }
+        }
+        None => {
+            axum::response::Response::builder()
+                .status(axum::http::StatusCode::UNAUTHORIZED)
+                .body(axum::body::Body::from("Missing token"))
+                .unwrap()
+        }
     }
 }

@@ -1,18 +1,16 @@
 mod test_utils;
 
-use test_utils::TestFixture;
-use vortex--::worker::{message_table_name_by_date, calculate_next_monday_delay, calculate_days_to_sunday};
-use chrono::{Utc, Datelike};
+use vortex__::worker::{calculate_days_to_sunday, calculate_next_monday_delay, message_table_name_by_date};
 
 #[test]
 fn test_message_table_name_by_date() {
-    let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc();
     assert_eq!(message_table_name_by_date(date), "messages_20260101");
 
-    let date = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc();
     assert_eq!(message_table_name_by_date(date), "messages_20261231");
 
-    let date = chrono::NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 6, 15).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc();
     assert_eq!(message_table_name_by_date(date), "messages_20260615");
 }
 
@@ -20,8 +18,7 @@ fn test_message_table_name_by_date() {
 fn test_calculate_next_monday_delay() {
     let delay = calculate_next_monday_delay();
     assert!(delay > chrono::TimeDelta::zero());
-    let max_delay = chrono::TimeDelta::days(7);
-    assert!(delay < max_delay);
+    assert!(delay < chrono::TimeDelta::days(7));
 }
 
 #[test]

@@ -1,7 +1,6 @@
 mod test_utils;
 
 use test_utils::TestFixture;
-use sqlx::PgPool;
 
 #[tokio::test]
 async fn test_run_migrations() {
@@ -14,6 +13,7 @@ async fn test_run_migrations() {
         "friend_requests",
         "conversation_participants",
         "id_generator_state",
+        "message_idempotency",
         "messages",
         "jwt_blacklist",
     ];
@@ -44,8 +44,14 @@ async fn test_migrations_create_indexes() {
         ("users", "idx_users_public_id"),
         ("groups", "idx_groups_owner_id"),
         ("group_members", "idx_group_members_uid"),
+        ("friend_requests", "idx_friend_requests_pending_unique"),
         ("friend_requests", "idx_friend_requests_from_user_id"),
         ("friend_requests", "idx_friend_requests_to_user_id"),
+        ("conversation_participants", "idx_conversation_participants_user_id"),
+        ("message_idempotency", "idx_message_idempotency_user_id"),
+        ("message_idempotency", "idx_message_idempotency_created_at"),
+        ("messages", "idx_messages_conv_ts"),
+        ("jwt_blacklist", "idx_jwt_blacklist_expires_at"),
     ];
 
     for (_, index) in indexes {

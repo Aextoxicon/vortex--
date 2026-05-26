@@ -20,7 +20,7 @@ vortex/
 │   ├── migration.rs       # 数据库迁移：表结构创建和版本管理
 │   ├── store.rs           # 数据访问层：所有数据库 CRUD 操作
 │   ├── s3.rs              # 文件模块：S3 预签名 URL 生成、文件权限控制
-│   ├── shared.rs          # 共享组件：通用结构体、健康检查、通知系统
+│   ├── shared.rs          # 共享组件：Service结构体、健康检查、通知系统、WebSocket推送
 │   ├── worker.rs          # 后台任务：定时任务、数据清理、表分区管理
 │   └── metrics.rs         # 指标模块：性能监控和统计
 ├── tests/                 # 集成测试
@@ -148,6 +148,7 @@ make test-all
 |------|------|------|------|
 | GET | `/health` | 否 | 健康检查 |
 | GET | `/ready` | 否 | 就绪检查 |
+| GET | `/metrics` | 否 | 运行时指标（PID、线程数、内存） |
 
 # 请求示例
 
@@ -233,13 +234,6 @@ sudo cp vortex.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable vortex
 sudo systemctl start vortex
-```
-
-# Docker
-
-```bash
-docker build -t vortex .
-docker run -p 8080:8080 --env-file .env vortex
 ```
 
 # 文档

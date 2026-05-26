@@ -1,6 +1,5 @@
 use dashmap::DashMap;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
@@ -36,6 +35,12 @@ struct RateLimiterShard {
 #[derive(Clone)]
 pub struct RateLimiter {
     shards: Vec<Arc<RateLimiterShard>>,
+}
+
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RateLimiter {
@@ -107,11 +112,11 @@ impl RateLimiter {
                 .collect();
 
             for key in expired_keys {
-                if let Some(entry) = shard.cache.get(&key) {
-                    if now - *entry.value() > ttl_ns {
-                        shard.cache.remove(&key);
-                        shard.fail_counts.remove(&key);
-                    }
+                if let Some(entry) = shard.cache.get(&key)
+                    && now - *entry.value() > ttl_ns
+                {
+                    shard.cache.remove(&key);
+                    shard.fail_counts.remove(&key);
                 }
             }
         }

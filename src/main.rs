@@ -1,47 +1,16 @@
-mod account;
-mod config;
-mod error;
-mod friend;
-mod groups;
-mod idgen;
-mod jwt;
-mod messaging;
-mod metrics;
-mod migration;
-mod ratelimit;
-mod s3;
-mod shared;
-mod store;
-mod worker;
-
-use axum::extract::State;
 use axum::Router;
-use config::Config;
-use error::ErrorResponse;
-use ratelimit::RateLimiter;
-use shared::Handler;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
-use tower::timeout::TimeoutLayer;
-use tower_http::add_extension::AddExtensionLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info_span;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use vortex__::*;
 
-pub struct AppState {
-    pub handler: Handler,
-    pub jwt_service: jwt::JwtService,
-    pub rate_limiter: RateLimiter,
-}
-
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REQUEST_BODY_SIZE: usize = 1 << 20;
-const MAX_MESSAGE_DAYS: i64 = 7;
-const MAX_CONVERSATIONS: i64 = 100;
 
 #[tokio::main]
 async fn main() {
@@ -73,7 +42,7 @@ async fn main() {
     let epoch_time = 1609459200000i64;
     let store = store::Store::new(pool.clone(), epoch_time);
     let rate_limiter = RateLimiter::new();
-    rate_limiter.start_cleanup();
+    rate_limiter.start_cleanup(std::time::Duration::from_secs(300), std::time::Duration::from_secs(600));
 
     let user_store = store::UserStore::new(store.clone());
     let msg_store = store::MessageStore::new(store.clone());
@@ -84,7 +53,7 @@ async fn main() {
     let id_gen_state_store = store::IdGeneratorStateStore::new(store.clone());
     let idempotency_store = store::MessageIdempotencyStore::new(store.clone());
 
-    let id_gen = idgen::IdGenerator::new(store.clone());
+    let id_gen = idgen::IdGenerator::new(pool.clone(), id_gen_state_store.clone(), msg_store.clone(), cfg.node_id, epoch_time);
     id_gen.init().await;
 
     let s3_service = if !cfg.s3_url.is_empty() {
@@ -118,13 +87,12 @@ async fn main() {
         cfg.clone(),
         pool.clone(),
         user_store,
-        msg_store,
+        msg_store.clone(),
         group_store,
         group_mem_store,
         friend_store,
         conv_part_store,
-        id_gen_state_store,
-        idempotency_store,
+        idempotency_store.clone(),
         id_gen,
         s3_service,
     );
@@ -137,21 +105,19 @@ async fn main() {
     );
     jwt_service.start_cleanup(std::time::Duration::from_secs(3600));
 
-    let handler = shared::Handler::new(svc.clone(), jwt_service.clone(), cfg.clone());
-
     let app_state = Arc::new(AppState {
-        handler,
+        svc,
         jwt_service,
         rate_limiter,
     });
 
     let app = setup_routes(app_state);
 
-    let worker = worker::Worker::new(&cfg);
+    let worker = worker::Worker::new(cfg.clone(), pool.clone(), msg_store.clone(), idempotency_store.clone());
 
     let mut create_err = None;
     for i in 0..3 {
-        match worker.create_tables_from_today_to_sunday_with_error() {
+        match worker.create_tables_from_today_to_sunday_with_error().await {
             Ok(()) => {
                 create_err = None;
                 break;
@@ -175,7 +141,7 @@ async fn main() {
         std::process::exit(1);
     }
 
-    worker.start();
+    worker.start().await;
 
     let addr: SocketAddr = cfg
         .port
@@ -196,25 +162,20 @@ async fn main() {
 
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        app.into_make_service(),
     )
     .with_graceful_shutdown(async move {
         shutdown_signal.await;
         tracing::info!("shutting down gracefully...");
 
         let cleanup_done = tokio::spawn(async move {
-            worker.stop();
-            rate_limiter.stop();
-            jwt_service.stop();
+            worker.stop().await;
         });
 
         let force_shutdown = tokio::spawn(async {
-            match signal::ctrl_c().await {
-                Ok(()) => {
-                    tracing::warn!("second signal received, forcing shutdown");
-                    std::process::exit(1);
-                }
-                Err(_) => {}
+            if let Ok(()) = signal::ctrl_c().await {
+                tracing::warn!("second signal received, forcing shutdown");
+                std::process::exit(1);
             }
         });
 
@@ -243,16 +204,16 @@ fn init_logging() {
 }
 
 async fn init_db(cfg: &Config) -> Result<sqlx::PgPool, String> {
-    let pool = sqlx::PgPool::connect(&cfg.database_url)
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(cfg.db_max_open_conns as u32)
+        .connect(&cfg.database_url)
         .await
         .map_err(|e| format!("failed to connect to database: {}", e))?;
-
-    pool.set_max_connections(cfg.db_max_open_conns as u32);
 
     Ok(pool)
 }
 
-fn setup_routes(app_state: Arc<AppState>) -> Router<SocketAddr> {
+fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
     let public_routes = Router::new()
         .route(
             "/auth/register",
@@ -261,56 +222,7 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<SocketAddr> {
         .route(
             "/auth/login",
             axum::routing::post(account::login),
-        )
-        .layer(axum::extract::Extension(app_state.clone()));
-
-    let auth_middleware = axum::middleware::from_fn(move |req, next| {
-        let app_state = app_state.clone();
-        async move {
-            let auth_header = req
-                .headers()
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|h| h.to_str().ok());
-
-            match auth_header {
-                Some(token) => {
-                    let token_str = if token.starts_with("Bearer ") {
-                        &token[7..]
-                    } else {
-                        token
-                    };
-
-                    match app_state.jwt_service.validate_token(token_str) {
-                        Ok(claims) => {
-                            if app_state.jwt_service.is_blacklisted(&claims.jti) {
-                                return axum::response::Response::builder()
-                                    .status(axum::http::StatusCode::UNAUTHORIZED)
-                                    .body(axum::body::Body::from("Token is blacklisted"))
-                                    .unwrap();
-                            }
-
-                            let mut req = req;
-                            req.extensions_mut().insert(claims.user_id);
-                            req.extensions_mut().insert(claims.public_id.clone());
-                            next.run(req).await
-                        }
-                        Err(_) => {
-                            axum::response::Response::builder()
-                                .status(axum::http::StatusCode::UNAUTHORIZED)
-                                .body(axum::body::Body::from("Invalid token"))
-                                .unwrap()
-                        }
-                    }
-                }
-                None => {
-                    axum::response::Response::builder()
-                        .status(axum::http::StatusCode::UNAUTHORIZED)
-                        .body(axum::body::Body::from("Missing token"))
-                        .unwrap()
-                }
-            }
-        }
-    });
+        );
 
     let protected_routes = Router::new()
         .route("/auth/me", axum::routing::get(account::get_me))
@@ -345,11 +257,11 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<SocketAddr> {
         )
         .route(
             "/blocks/:target_public_id",
-            axum::routing::post(messaging::block_user),
+            axum::routing::post(friend::block_user),
         )
         .route(
             "/blocks/:target_public_id",
-            axum::routing::delete(messaging::unblock_user),
+            axum::routing::delete(friend::unblock_user),
         )
         .route(
             "/groups",
@@ -399,18 +311,24 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<SocketAddr> {
             "/friends/request/:request_id",
             axum::routing::delete(friend::cancel_friend_request),
         )
-        .layer(auth_middleware)
-        .layer(axum::extract::Extension(app_state.clone()));
+        .route(
+            "/files/presign",
+            axum::routing::post(s3::presign),
+        );
 
     let api_routes = public_routes.merge(protected_routes);
 
-    Router::new()
+    let app = Router::new()
         .route("/health", axum::routing::get(shared::health_check))
         .route("/ready", axum::routing::get(shared::readiness_check))
         .route("/metrics", axum::routing::get(metrics::metrics))
-        .nest("/api", api_routes)
-        .layer(axum::extract::Extension(app_state))
-        .layer(TimeoutLayer::new(REQUEST_TIMEOUT))
+        .nest("/api", api_routes);
+
+    let app = app
+        .layer(axum::middleware::from_fn_with_state(
+            (*app_state).clone(),
+            jwt::auth_middleware,
+        ))
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_SIZE))
         .layer(
             TraceLayer::new_for_http()
@@ -423,10 +341,8 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<SocketAddr> {
                 })
                 .on_response(|response: &axum::http::Response<_>, latency: Duration, _span: &tracing::Span| {
                     let path = response.extensions().get::<String>();
-                    if let Some(path_str) = path {
-                        if path_str == "/health" || path_str == "/ready" {
-                            return;
-                        }
+                    if let Some(path_str) = path && (path_str == "/health" || path_str == "/ready") {
+                        return;
                     }
 
                     let status = response.status();
@@ -438,7 +354,9 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<SocketAddr> {
                         );
                     }
                 }),
-        )
+        );
+
+    app.with_state((*app_state).clone())
 }
 
 async fn shutdown_signal() {

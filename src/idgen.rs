@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
@@ -26,15 +26,14 @@ pub struct IdSegment {
 
 impl IdSegment {
     pub fn new(start_id: i64, end_id: i64, base_ts: i64, end_ts: i64, node_id: i64) -> Self {
-        let seg = Self {
+        Self {
             start_id,
             end_id,
             base_ts,
             end_ts,
             node_id,
             current: Arc::new(AtomicI64::new(start_id - 1)),
-        };
-        seg
+        }
     }
 
     pub fn remaining(&self) -> i64 {
@@ -56,6 +55,22 @@ pub struct IdGenerator {
     message_store: crate::store::MessageStore,
     init_done: Arc<tokio::sync::Notify>,
     init_once: Arc<std::sync::Once>,
+}
+
+impl Clone for IdGenerator {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            node_id: self.node_id,
+            epoch_time: self.epoch_time.clone(),
+            segments: self.segments.clone(),
+            prefetch_semaphore: self.prefetch_semaphore.clone(),
+            id_gen_state_store: self.id_gen_state_store.clone(),
+            message_store: self.message_store.clone(),
+            init_done: self.init_done.clone(),
+            init_once: self.init_once.clone(),
+        }
+    }
 }
 
 impl IdGenerator {
@@ -96,7 +111,7 @@ impl IdGenerator {
             let result = rt.block_on(async {
                 let state = id_gen_state_store.get_first().await.map_err(|e| format!("load state: {}", e))?;
                 
-                let epoch_time = if let Some(s) = state {
+                let new_epoch_time = if let Some(s) = state {
                     s.epoch_time
                 } else {
                     let now = std::time::SystemTime::now()
@@ -126,7 +141,7 @@ impl IdGenerator {
                     cfg_epoch_time
                 };
                 
-                *epoch_time.lock().unwrap() = epoch_time;
+                *epoch_time.lock().unwrap() = new_epoch_time;
                 
                 Ok::<_, String>(())
             });
@@ -236,7 +251,7 @@ impl IdGenerator {
     ) -> Result<(), String> {
         {
             let segs = segments.lock().unwrap();
-            if segs.len() >= 1 {
+            if !segs.is_empty() {
                 return Ok(());
             }
         }
@@ -248,7 +263,7 @@ impl IdGenerator {
             .await
             .map_err(|e| format!("load state: {}", e))?;
 
-        let start_ts = if let Some(s) = state {
+        let start_ts = if let Some(ref s) = state {
             s.last_ts + 1
         } else {
             std::time::SystemTime::now()
@@ -306,14 +321,12 @@ impl IdGenerator {
         }
 
         let mut new_ts = current_ts;
-        let mut new_seq = current_seq;
-
-        if current_seq < VF_MAX_SEQUENCE {
-            new_seq = current_seq + 1;
+        let new_seq = if current_seq < VF_MAX_SEQUENCE {
+            current_seq + 1
         } else {
             new_ts = current_ts + 1;
-            new_seq = 0;
-        }
+            0
+        };
 
         if new_ts > VF_MAX_TIMESTAMP {
             return Err("timestamp overflow".to_string());

@@ -1,5 +1,5 @@
-use vortex--::account::{validate_password, validate_username, validate_email};
-use vortex--::groups::validate_group_name;
+use vortex__::account::{validate_password, validate_username, validate_email};
+use vortex__::groups::validate_group_name;
 
 #[test]
 fn test_validate_password() {

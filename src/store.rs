@@ -1,6 +1,4 @@
-use sqlx::postgres::PgPool;
-use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Row, Transaction};
-use std::time::Duration;
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -120,6 +118,10 @@ pub struct UserStore {
 }
 
 impl UserStore {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     pub async fn get_by_ids(&self, ids: &[i64]) -> Result<std::collections::HashMap<i64, User>, sqlx::Error> {
         if ids.is_empty() {
             return Ok(std::collections::HashMap::new());
@@ -243,6 +245,10 @@ pub struct MessageIdempotencyStore {
 }
 
 impl MessageIdempotencyStore {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     pub async fn check_and_insert(
         &self,
         user_id: i64,
@@ -314,6 +320,23 @@ impl MessageIdempotencyStore {
             .await?;
         Ok(())
     }
+
+    pub async fn delete_stale(&self, retention_ms: i64) -> Result<u64, sqlx::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let cutoff = now - retention_ms;
+
+        let query = r#"
+            DELETE FROM message_idempotency 
+            WHERE created_at < $1"#;
+        let result = sqlx::query(query)
+            .bind(cutoff)
+            .execute(&self.store.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -322,6 +345,10 @@ pub struct MessageStore {
 }
 
 impl MessageStore {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     pub async fn get_message(&self, msg_id: i64) -> Result<Option<Message>, sqlx::Error> {
         let query = r#"
             SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
@@ -492,6 +519,38 @@ impl MessageStore {
         })
     }
 
+    pub async fn get_conversation_messages_after(
+        &self,
+        conv_id: &str,
+        last_msg_id: i64,
+        limit: i64,
+    ) -> Result<MessagePage, sqlx::Error> {
+        let query_limit = limit + 1;
+        let query = r#"
+            SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
+            FROM messages
+            WHERE conv_id = $1 AND msg_id > $2
+            ORDER BY msg_id ASC
+            LIMIT $3"#;
+        let messages = sqlx::query_as::<_, Message>(query)
+            .bind(conv_id)
+            .bind(last_msg_id)
+            .bind(query_limit)
+            .fetch_all(&self.store.pool)
+            .await?;
+
+        let has_more = messages.len() as i64 > limit;
+        let messages = if has_more {
+            messages[..limit as usize].to_vec()
+        } else {
+            messages
+        };
+
+        let max_msg_id = messages.last().map(|m| m.msg_id).unwrap_or(0);
+
+        Ok(MessagePage { messages, has_more, max_msg_id })
+    }
+
     pub async fn get_message_count(&self, conv_id: &str) -> Result<i64, sqlx::Error> {
         let query = r#"SELECT COUNT(*) FROM messages WHERE conv_id = $1"#;
         let count: i64 = sqlx::query_scalar(query)
@@ -560,25 +619,24 @@ impl MessageStore {
         Ok(max_id.unwrap_or(0))
     }
 
-    pub async fn has_new_messages_after(
+    pub async fn get_updated_conversations(
         &self,
         user_id: i64,
         last_msg_id: i64,
-    ) -> Result<bool, sqlx::Error> {
+    ) -> Result<Vec<String>, sqlx::Error> {
         let query = r#"
-            SELECT EXISTS(
-                SELECT 1 FROM messages
-                WHERE msg_id > $1
-                AND conv_id IN (
-                    SELECT conv_id FROM conversation_participants WHERE user_id = $2
-                )
+            SELECT DISTINCT conv_id
+            FROM messages
+            WHERE msg_id > $1
+            AND conv_id IN (
+                SELECT conv_id FROM conversation_participants WHERE user_id = $2
             )"#;
-        let exists: bool = sqlx::query_scalar(query)
+        let conv_ids: Vec<String> = sqlx::query_scalar(query)
             .bind(last_msg_id)
             .bind(user_id)
-            .fetch_one(&self.store.pool)
+            .fetch_all(&self.store.pool)
             .await?;
-        Ok(exists)
+        Ok(conv_ids)
     }
 }
 
@@ -588,6 +646,10 @@ pub struct GroupStore {
 }
 
 impl GroupStore {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     pub async fn get_by_id(&self, group_id: &str) -> Result<Option<Group>, sqlx::Error> {
         let query = r#"
             SELECT group_id, name, description, owner_id, created_at, updated_at, is_deleted
@@ -676,6 +738,10 @@ pub struct GroupMemberStore {
 }
 
 impl GroupMemberStore {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     pub async fn get(&self, group_id: &str, uid: i64) -> Result<Option<GroupMember>, sqlx::Error> {
         let query = r#"
             SELECT id, group_id, uid, role, joined_at
@@ -816,6 +882,16 @@ impl GroupMemberStore {
             .await?;
         Ok(exists)
     }
+
+    pub async fn get_members(&self, group_id: &str) -> Result<Vec<GroupMember>, sqlx::Error> {
+        let query = r#"SELECT id, group_id, uid, role, joined_at
+                       FROM group_members WHERE group_id = $1
+                       ORDER BY joined_at ASC"#;
+        sqlx::query_as::<_, GroupMember>(query)
+            .bind(group_id)
+            .fetch_all(&self.store.pool)
+            .await
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -824,6 +900,10 @@ pub struct FriendRequestStore {
 }
 
 impl FriendRequestStore {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     pub async fn get_by_id(&self, id: i64) -> Result<Option<FriendRequest>, sqlx::Error> {
         let query = r#"SELECT id, from_user_id, to_user_id, message, status, created_at, updated_at
                        FROM friend_requests WHERE id = $1"#;
@@ -958,8 +1038,9 @@ impl FriendRequestStore {
         let result = sqlx::query(query)
             .bind(user_id)
             .execute(&mut **tx)
-            .await?;
-        Ok(result.rows_affected())
+            .await
+            .map(|r| r.rows_affected())?;
+        Ok(result)
     }
 
     pub async fn get_received_requests(
@@ -1100,6 +1181,10 @@ pub struct ConversationParticipantStore {
 }
 
 impl ConversationParticipantStore {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     pub async fn insert(&self, participant: &ConversationParticipant) -> Result<u64, sqlx::Error> {
         let query = r#"
             INSERT INTO conversation_participants (conv_id, user_id, join_ts, is_blocked)
@@ -1302,6 +1387,32 @@ impl ConversationParticipantStore {
         }
         Ok(total)
     }
+
+    pub async fn delete_by_user_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: i64,
+    ) -> Result<u64, sqlx::Error> {
+        let query = r#"
+            DELETE FROM conversation_participants
+            WHERE user_id = $1"#;
+        sqlx::query(query)
+            .bind(user_id)
+            .execute(&mut **tx)
+            .await
+            .map(|r| r.rows_affected())
+    }
+
+    pub async fn count_user_conversations(&self, user_id: i64) -> Result<i64, sqlx::Error> {
+        let query = r#"
+            SELECT COUNT(*) FROM conversation_participants
+            WHERE user_id = $1"#;
+        let count: i64 = sqlx::query_scalar(query)
+            .bind(user_id)
+            .fetch_one(&self.store.pool)
+            .await?;
+        Ok(count)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1310,6 +1421,10 @@ pub struct IdGeneratorStateStore {
 }
 
 impl IdGeneratorStateStore {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     pub async fn get_first(&self) -> Result<Option<IdGeneratorState>, sqlx::Error> {
         let query = r#"SELECT id, last_ts, epoch_time FROM id_generator_state ORDER BY id LIMIT 1"#;
         sqlx::query_as::<_, IdGeneratorState>(query)

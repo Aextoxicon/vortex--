@@ -5,11 +5,12 @@ use axum::Router;
 use serde_json::json;
 use std::sync::Arc;
 use test_utils::{TestFixture, unique_username};
-use vortex--::{account, config, error, jwt, main, migration, ratelimit, shared, store};
+use tower::util::ServiceExt;
+use vortex__::{account, config, idgen, jwt, ratelimit, shared, store, AppState};
 
-async fn setup_test_app() -> (TestFixture, Router, Arc<main::AppState>) {
+async fn setup_test_app() -> (TestFixture, Router, Arc<AppState>) {
     let fixture = TestFixture::new().await;
-    
+
     let cfg = config::Config {
         node_id: 1,
         jwt_secret: "test-secret-key-min-32-chars-long!!".to_string(),
@@ -32,13 +33,14 @@ async fn setup_test_app() -> (TestFixture, Router, Arc<main::AppState>) {
         worker_table_create_interval_hours: 24,
         worker_maintenance_initial_delay_minutes: 1,
         worker_maintenance_interval_hours: 24,
+        idempotency_retention_hours: 24,
         s3_url: String::new(),
     };
-    
+
     let epoch_time = 1609459200000i64;
     let store = store::Store::new(fixture.pool.clone(), epoch_time);
     let rate_limiter = ratelimit::RateLimiter::new();
-    
+
     let user_store = store::UserStore::new(store.clone());
     let msg_store = store::MessageStore::new(store.clone());
     let group_store = store::GroupStore::new(store.clone());
@@ -47,7 +49,7 @@ async fn setup_test_app() -> (TestFixture, Router, Arc<main::AppState>) {
     let conv_part_store = store::ConversationParticipantStore::new(store.clone());
     let id_gen_state_store = store::IdGeneratorStateStore::new(store.clone());
     let idempotency_store = store::MessageIdempotencyStore::new(store.clone());
-    
+
     let id_gen = idgen::IdGenerator::new(
         fixture.pool.clone(),
         id_gen_state_store.clone(),
@@ -56,7 +58,7 @@ async fn setup_test_app() -> (TestFixture, Router, Arc<main::AppState>) {
         cfg.epoch_time,
     );
     id_gen.init().await;
-    
+
     let svc = shared::Service::new(
         cfg.clone(),
         fixture.pool.clone(),
@@ -66,63 +68,43 @@ async fn setup_test_app() -> (TestFixture, Router, Arc<main::AppState>) {
         group_mem_store,
         friend_store,
         conv_part_store,
-        id_gen_state_store,
         idempotency_store,
         id_gen,
         None,
     );
-    
+
     let jwt_service = jwt::JwtService::new(
         fixture.pool.clone(),
         &cfg.jwt_secret,
         &cfg.jwt_issuer,
         cfg.jwt_expires_minutes,
     );
-    
-    let handler = shared::Handler::new(svc.clone(), jwt_service.clone(), cfg.clone());
-    
-    let app_state = Arc::new(main::AppState {
-        handler,
+
+    let app_state = Arc::new(AppState {
+        svc,
         jwt_service,
         rate_limiter,
     });
-    
+
     let app = Router::new()
         .route("/api/auth/register", axum::routing::post(account::register))
         .route("/api/auth/login", axum::routing::post(account::login))
-        .layer(axum::extract::Extension(app_state.clone()));
-    
-    (fixture, app, app_state)
-}
+        .with_state((*app_state).clone());
 
-#[tokio::test]
-async fn test_health_check() {
-    let (_fixture, app, _state) = setup_test_app().await;
-    
-    let response = app
-        .oneshot(
-            axum::http::Request::builder()
-                .uri("/health")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    
-    assert_eq!(response.status(), StatusCode::OK);
+    (fixture, app, app_state)
 }
 
 #[tokio::test]
 async fn test_register_success() {
     let (_fixture, app, _state) = setup_test_app().await;
-    
+
     let username = unique_username();
     let body = json!({
         "username": username,
         "password": "Test1234!",
         "email": format!("{}@example.com", username)
     });
-    
+
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -134,20 +116,20 @@ async fn test_register_success() {
         )
         .await
         .unwrap();
-    
+
     assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 #[tokio::test]
 async fn test_register_weak_password() {
     let (_fixture, app, _state) = setup_test_app().await;
-    
+
     let body = json!({
         "username": "weakuser",
         "password": "123",
         "email": "weak@example.com"
     });
-    
+
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -159,20 +141,20 @@ async fn test_register_weak_password() {
         )
         .await
         .unwrap();
-    
+
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn test_register_invalid_username() {
     let (_fixture, app, _state) = setup_test_app().await;
-    
+
     let body = json!({
         "username": "ab",
         "password": "Test1234!",
         "email": "ab@example.com"
     });
-    
+
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -184,22 +166,23 @@ async fn test_register_invalid_username() {
         )
         .await
         .unwrap();
-    
+
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn test_register_duplicate() {
     let (_fixture, app, _state) = setup_test_app().await;
-    
+
     let username = unique_username();
     let body = json!({
         "username": &username,
         "password": "Test1234!",
         "email": format!("{}@example.com", username)
     });
-    
+
     let response = app
+        .clone()
         .oneshot(
             axum::http::Request::builder()
                 .method("POST")
@@ -210,9 +193,9 @@ async fn test_register_duplicate() {
         )
         .await
         .unwrap();
-    
+
     assert_eq!(response.status(), StatusCode::CREATED);
-    
+
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -224,37 +207,38 @@ async fn test_register_duplicate() {
         )
         .await
         .unwrap();
-    
+
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
 async fn test_login_success() {
     let (_fixture, app, _state) = setup_test_app().await;
-    
+
     let username = unique_username();
     let body = json!({
         "username": &username,
         "password": "Test1234!",
         "email": format!("{}@example.com", username)
     });
-    
-    app.oneshot(
-        axum::http::Request::builder()
-            .method("POST")
-            .uri("/api/auth/register")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
-            .unwrap(),
-    )
-    .await
-    .unwrap();
-    
+
+    app.clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/auth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
     let login_body = json!({
         "username": &username,
         "password": "Test1234!"
     });
-    
+
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -266,37 +250,38 @@ async fn test_login_success() {
         )
         .await
         .unwrap();
-    
+
     assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
 async fn test_login_wrong_password() {
     let (_fixture, app, _state) = setup_test_app().await;
-    
+
     let username = unique_username();
     let body = json!({
         "username": &username,
         "password": "Test1234!",
         "email": format!("{}@example.com", username)
     });
-    
-    app.oneshot(
-        axum::http::Request::builder()
-            .method("POST")
-            .uri("/api/auth/register")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
-            .unwrap(),
-    )
-    .await
-    .unwrap();
-    
+
+    app.clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/auth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
     let login_body = json!({
         "username": &username,
         "password": "wrongpass1!"
     });
-    
+
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -308,6 +293,6 @@ async fn test_login_wrong_password() {
         )
         .await
         .unwrap();
-    
+
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

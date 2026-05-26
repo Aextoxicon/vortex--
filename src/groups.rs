@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::error::AppError;
-use crate::shared::{Handler, Service};
+use crate::shared::Service;
 use crate::store::{Group, GroupMember};
 
 #[derive(Debug, Deserialize)]
@@ -30,137 +30,20 @@ pub struct CreateGroupResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct MemberInfo {
+    pub public_id: String,
+    pub username: String,
+    pub role: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct GetGroupResponse {
     pub group_id: String,
     pub name: String,
-    pub owner_id: i64,
-}
-
-impl Handler {
-    pub async fn create_group(
-        &self,
-        user_id: i64,
-        public_id: String,
-        req: Json<CreateGroupRequest>,
-    ) -> Result<impl IntoResponse, AppError> {
-        let req = req.0;
-
-        if !validate_group_name(&req.name) {
-            return Err(AppError::bad_request("Group name must be 1-50 characters"));
-        }
-
-        let group_id = self.svc.create_group(&req.name, &req.description, user_id).await?;
-
-        Ok((
-            StatusCode::CREATED,
-            Json(CreateGroupResponse {
-                group_id,
-                name: req.name,
-                owner_public_id: public_id,
-            }),
-        ))
-    }
-
-    pub async fn get_group(
-        &self,
-        id: Path<String>,
-    ) -> Result<impl IntoResponse, AppError> {
-        let id = id.0;
-
-        let group = self.svc.get_group_by_id(&id).await?;
-
-        Ok(Json(GetGroupResponse {
-            group_id: group.group_id,
-            name: group.name,
-            owner_id: group.owner_id,
-        }))
-    }
-
-    pub async fn update_group(
-        &self,
-        id: Path<String>,
-        user_id: i64,
-        req: Json<UpdateGroupRequest>,
-    ) -> Result<impl IntoResponse, AppError> {
-        let id = id.0;
-        let req = req.0;
-
-        let group = self.svc.get_group_by_id(&id).await?;
-
-        if group.owner_id != user_id {
-            return Err(AppError::forbidden());
-        }
-
-        let mut updated_group = group;
-        if !req.name.is_empty() {
-            updated_group.name = req.name;
-        }
-
-        self.svc.update_group(&updated_group).await?;
-
-        Ok(Json(json!({
-            "group_id": updated_group.group_id,
-            "name": updated_group.name,
-        })))
-    }
-
-    pub async fn delete_group(
-        &self,
-        id: Path<String>,
-        user_id: i64,
-    ) -> Result<impl IntoResponse, AppError> {
-        let id = id.0;
-
-        let group = self.svc.get_group_by_id(&id).await?;
-
-        if group.owner_id != user_id {
-            return Err(AppError::forbidden());
-        }
-
-        self.svc.delete_group(&id).await?;
-
-        Ok(StatusCode::NO_CONTENT)
-    }
-
-    pub async fn join_group(
-        &self,
-        id: Path<String>,
-        user_id: i64,
-    ) -> Result<impl IntoResponse, AppError> {
-        let id = id.0;
-
-        self.svc.add_member(&id, user_id, "member").await?;
-
-        Ok(Json(json!({ "message": "Successfully joined group" })))
-    }
-
-    pub async fn leave_group(
-        &self,
-        id: Path<String>,
-        user_id: i64,
-    ) -> Result<impl IntoResponse, AppError> {
-        let id = id.0;
-
-        self.svc.remove_member(&id, user_id).await?;
-
-        Ok(Json(json!({ "message": "Successfully left group" })))
-    }
-
-    pub async fn kick_member(
-        &self,
-        id: Path<String>,
-        member_public_id: Path<String>,
-        owner_id: i64,
-    ) -> Result<impl IntoResponse, AppError> {
-        let group_id = id.0;
-        let member_public_id = member_public_id.0;
-
-        let member_user = self.svc.get_user_by_public_id(&member_public_id).await?;
-
-        self.svc.kick_member(&group_id, member_user.id, owner_id).await?;
-
-        Ok(Json(json!({ "message": "Member kicked successfully" })))
-    }
+    pub description: String,
+    pub owner_id: String,
+    pub members: Vec<MemberInfo>,
+    pub created_at: String,
 }
 
 impl Service {
@@ -170,11 +53,15 @@ impl Service {
         description: &str,
         owner_id: i64,
     ) -> Result<String, AppError> {
+        if !validate_group_name(name) {
+            return Err(AppError::bad_request("Group name must be 1-50 characters"));
+        }
+
         let mut tx = self
             .pool
             .begin()
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         let now = chrono::Utc::now().timestamp_millis();
         let group_id = self.generate_group_id();
@@ -202,7 +89,7 @@ impl Service {
         .bind(group.is_deleted)
         .execute(&mut *tx)
         .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        ?;
 
         sqlx::query(
             r#"INSERT INTO group_members (group_id, uid, role, joined_at)
@@ -214,11 +101,11 @@ impl Service {
         .bind(now)
         .execute(&mut *tx)
         .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        ?;
 
         tx.commit()
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         Ok(group_id)
     }
@@ -228,7 +115,7 @@ impl Service {
             .group_store
             .get_by_id(group_id)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
         group.ok_or_else(|| AppError::not_found("group not found"))
     }
 
@@ -239,7 +126,7 @@ impl Service {
         self.group_store
             .update(&updated)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         Ok(())
     }
@@ -249,22 +136,22 @@ impl Service {
             .pool
             .begin()
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         self.group_mem_store
             .delete_by_group_tx(&mut tx, group_id)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         sqlx::query(r#"UPDATE groups SET is_deleted = 1 WHERE group_id = $1"#)
             .bind(group_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         tx.commit()
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         Ok(())
     }
@@ -290,7 +177,7 @@ impl Service {
             .group_mem_store
             .insert(&member)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         if id == 0 {
             return Err(AppError::new(StatusCode::CONFLICT, "Already a member"));
@@ -318,13 +205,13 @@ impl Service {
             .pool
             .begin()
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         let member = self
             .group_mem_store
             .get_tx(&mut tx, group_id, user_id)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         match member {
             None => return Err(AppError::new(StatusCode::NOT_FOUND, "Not a group member")),
@@ -335,11 +222,11 @@ impl Service {
         self.group_mem_store
             .delete_by_group_and_user_tx(&mut tx, group_id, user_id)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         tx.commit()
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         Ok(())
     }
@@ -366,13 +253,13 @@ impl Service {
             .pool
             .begin()
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         let is_member = self
             .group_mem_store
             .is_member_tx(&mut tx, group_id, member_id)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         if !is_member {
             return Err(AppError::new(StatusCode::NOT_FOUND, "Not a group member"));
@@ -381,7 +268,7 @@ impl Service {
         self.group_mem_store
             .delete_by_group_and_user_tx(&mut tx, group_id, member_id)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         let conv_id = format!("g_{}", group_id);
         let system_msg = json!({
@@ -400,7 +287,7 @@ impl Service {
 
         tx.commit()
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            ?;
 
         tracing::info!(
             group_id = group_id,
@@ -439,18 +326,16 @@ impl Service {
         .bind(0i32)
         .execute(&mut **tx)
         .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        ?;
 
         Ok(msg_id)
     }
 
-    pub async fn get_user_by_id(&self, id: i64) -> Result<crate::store::User, AppError> {
-        let user = self
-            .user_store
-            .get_by_id(id)
+    pub async fn get_group_members(&self, group_id: &str) -> Result<Vec<crate::store::GroupMember>, AppError> {
+        self.group_mem_store
+            .get_members(group_id)
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-        user.ok_or_else(|| AppError::not_found("user not found"))
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
     }
 
     pub fn generate_group_id(&self) -> String {
@@ -475,9 +360,9 @@ impl Service {
     }
 }
 
-fn validate_group_name(name: &str) -> bool {
+pub fn validate_group_name(name: &str) -> bool {
     let len = name.chars().count();
-    len >= 1 && len <= 50
+    (1..=50).contains(&len)
 }
 
 pub fn is_group_conv(conv_id: &str) -> bool {
@@ -493,58 +378,138 @@ pub fn extract_group_id(conv_id: &str) -> String {
 }
 
 pub async fn create_group(
-    State(state): State<crate::main::AppState>,
+    State(state): State<crate::AppState>,
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
     axum::extract::Extension(public_id): axum::extract::Extension<String>,
     req: Json<CreateGroupRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    state.handler.create_group(user_id, public_id, req).await
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let req = req.0;
+
+    let group_id = state.svc.create_group(&req.name, &req.description, user_id).await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateGroupResponse {
+            group_id,
+            name: req.name,
+            owner_public_id: public_id,
+        }),
+    ))
 }
 
 pub async fn get_group(
-    State(state): State<crate::main::AppState>,
-    id: Path<String>,
-) -> Result<impl IntoResponse, AppError> {
-    state.handler.get_group(id).await
+    State(state): State<crate::AppState>,
+    axum::extract::Extension(_user_id): axum::extract::Extension<i64>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let group = state.svc.get_group_by_id(&id).await?;
+
+    let owner = state.svc.get_user_by_id(group.owner_id).await?;
+
+    let members_raw = state.svc.get_group_members(&id).await?;
+    let member_ids: Vec<i64> = members_raw.iter().map(|m| m.uid).collect();
+    let users_map = state.svc.get_users_by_ids(&member_ids).await?;
+
+    let epoch_time = state.svc.id_gen.get_epoch_time();
+    let ts_ms = epoch_time + group.created_at;
+    let secs = ts_ms / 1000;
+    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
+    let created_at = chrono::DateTime::from_timestamp(secs, nsecs)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+
+    let mut members: Vec<MemberInfo> = Vec::new();
+    for m in &members_raw {
+        if let Some(user) = users_map.get(&m.uid) {
+            members.push(MemberInfo {
+                public_id: user.public_id.clone(),
+                username: user.username.clone(),
+                role: m.role.clone(),
+            });
+        }
+    }
+
+    Ok(Json(GetGroupResponse {
+        group_id: group.group_id,
+        name: group.name,
+        description: group.description,
+        owner_id: owner.public_id,
+        members,
+        created_at,
+    }))
 }
 
 pub async fn update_group(
-    State(state): State<crate::main::AppState>,
+    State(state): State<crate::AppState>,
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
-    id: Path<String>,
+    axum::extract::Path(id): axum::extract::Path<String>,
     req: Json<UpdateGroupRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    state.handler.update_group(id, user_id, req).await
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let req = req.0;
+
+    let group = state.svc.get_group_by_id(&id).await?;
+
+    if group.owner_id != user_id {
+        return Err(AppError::forbidden());
+    }
+
+    let mut updated_group = group;
+    if !req.name.is_empty() {
+        updated_group.name = req.name;
+    }
+
+    state.svc.update_group(&updated_group).await?;
+
+    Ok(Json(json!({
+        "group_id": updated_group.group_id,
+        "name": updated_group.name,
+    })))
 }
 
 pub async fn delete_group(
-    State(state): State<crate::main::AppState>,
+    State(state): State<crate::AppState>,
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
-    id: Path<String>,
-) -> Result<impl IntoResponse, AppError> {
-    state.handler.delete_group(id, user_id).await
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let group = state.svc.get_group_by_id(&id).await?;
+
+    if group.owner_id != user_id {
+        return Err(AppError::forbidden());
+    }
+
+    state.svc.delete_group(&id).await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn join_group(
-    State(state): State<crate::main::AppState>,
+    State(state): State<crate::AppState>,
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
-    id: Path<String>,
-) -> Result<impl IntoResponse, AppError> {
-    state.handler.join_group(id, user_id).await
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    state.svc.add_member(&id, user_id, "member").await?;
+
+    Ok(Json(json!({ "message": "Successfully joined group" })))
 }
 
 pub async fn leave_group(
-    State(state): State<crate::main::AppState>,
+    State(state): State<crate::AppState>,
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
-    id: Path<String>,
-) -> Result<impl IntoResponse, AppError> {
-    state.handler.leave_group(id, user_id).await
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    state.svc.remove_member(&id, user_id).await?;
+
+    Ok(Json(json!({ "message": "Successfully left group" })))
 }
 
 pub async fn kick_member(
-    State(state): State<crate::main::AppState>,
+    State(state): State<crate::AppState>,
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
-    Path((id, member_public_id)): Path<(String, String)>,
-) -> Result<impl IntoResponse, AppError> {
-    state.handler.kick_member(Path(id), Path(member_public_id), user_id).await
+    axum::extract::Path((id, member_public_id)): axum::extract::Path<(String, String)>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let member_user = state.svc.get_user_by_public_id(&member_public_id).await?;
+
+    state.svc.kick_member(&id, member_user.id, user_id).await?;
+
+    Ok(Json(json!({ "message": "Member kicked successfully" })))
 }
