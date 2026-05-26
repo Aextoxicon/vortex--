@@ -3,7 +3,6 @@ name: Cross-Platform Build & Release
 on:
   push:
     branches: [main, master]
-    tags: ["v*"]
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -12,24 +11,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  cross-build:
-    name: Build (${{ matrix.target }})
+  build-and-release:
+    name: Build and Release
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
 
       - name: Install Zig
         uses: goto-bus-stop/setup-zig@v2
@@ -39,58 +36,67 @@ jobs:
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild
 
-      - name: Build
-        run: cargo zigbuild --release --target ${{ matrix.target }}
+      - name: Build x86_64
+        run: cargo zigbuild --release --target x86_64-unknown-linux-gnu
 
-      - name: Prepare release asset
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Build aarch64
+        run: cargo zigbuild --release --target aarch64-unknown-linux-gnu
+
+      - name: Extract version
+        id: extract_version
+        run: |
+          VERSION=$(grep -E '^version' Cargo.toml | head -n 1 | sed 's/.*= *"\(.*\)".*/\1/')
+          if [ -z "$VERSION" ] || ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: Invalid version format extracted: '$VERSION'"
+            exit 1
+          fi
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Package binaries
         run: |
           mkdir -p release-assets
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../../release-assets/vortex--${{ matrix.target }}.tar.gz vortex--
-          cd ../../../..
+          tar czf release-assets/vortex---x86_64-unknown-linux-gnu.tar.gz -C target/x86_64-unknown-linux-gnu/release vortex--
+          tar czf release-assets/vortex---aarch64-unknown-linux-gnu.tar.gz -C target/aarch64-unknown-linux-gnu/release vortex--
 
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: vortex--${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/vortex--
-          compression-level: 6
-
-      - name: Upload release tarball
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
-        with:
-          name: vortex--${{ matrix.target }}-tarball
-          path: release-assets/vortex--${{ matrix.target }}.tar.gz
-          compression-level: 0
-
-  release:
-    name: Publish Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [cross-build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: vortex--*-tarball
-          path: release-assets
-          merge-multiple: true
-
-      - name: List assets
+      - name: Check if release already exists
+        id: check_release
         run: |
-          echo "Release assets:"
-          find release-assets -type f
+          if gh release view "v${{ env.APP_VERSION }}" >/dev/null 2>&1; then
+            echo "Release v${{ env.APP_VERSION }} already exists"
+            echo "RELEASE_EXISTS=true" >> $GITHUB_ENV
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Release v${{ env.APP_VERSION }} does not exist"
+            echo "RELEASE_EXISTS=false" >> $GITHUB_ENV
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-assets/**/*
-          generate_release_notes: true
+      - name: Create tag and release
+        if: ${{ steps.check_release.outputs.exists == 'false' && github.event_name != 'pull_request' }}
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          if git rev-parse "v${{ env.APP_VERSION }}" >/dev/null 2>&1; then
+            echo "Tag v${{ env.APP_VERSION }} already exists locally"
+          else
+            git tag -a "v${{ env.APP_VERSION }}" -m "Release v${{ env.APP_VERSION }}"
+          fi
+          git push origin "v${{ env.APP_VERSION }}"
+
+          gh release create "v${{ env.APP_VERSION }}" \
+            --title "Release v${{ env.APP_VERSION }}" \
+            --notes "Automated release by GitHub Actions" \
+            release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to existing release
+        if: ${{ steps.check_release.outputs.exists == 'true' && github.event_name != 'pull_request' }}
+        run: |
+          gh release upload "v${{ env.APP_VERSION }}" release-assets/* --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
