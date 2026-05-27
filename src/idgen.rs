@@ -54,7 +54,6 @@ pub struct IdGenerator {
     id_gen_state_store: crate::store::IdGeneratorStateStore,
     message_store: crate::store::MessageStore,
     init_done: Arc<tokio::sync::Notify>,
-    init_once: Arc<std::sync::Once>,
 }
 
 impl Clone for IdGenerator {
@@ -68,7 +67,6 @@ impl Clone for IdGenerator {
             id_gen_state_store: self.id_gen_state_store.clone(),
             message_store: self.message_store.clone(),
             init_done: self.init_done.clone(),
-            init_once: self.init_once.clone(),
         }
     }
 }
@@ -90,12 +88,10 @@ impl IdGenerator {
             id_gen_state_store,
             message_store,
             init_done: Arc::new(tokio::sync::Notify::new()),
-            init_once: Arc::new(std::sync::Once::new()),
         }
     }
 
     pub async fn init(&self) {
-        let init_once = self.init_once.clone();
         let pool = self.pool.clone();
         let node_id = self.node_id;
         let epoch_time = self.epoch_time.clone();
@@ -105,68 +101,62 @@ impl IdGenerator {
         let init_done = self.init_done.clone();
         let cfg_epoch_time = *epoch_time.lock().unwrap();
 
-        init_once.call_once(|| {
-            let rt = tokio::runtime::Handle::current();
-            
-            let result = rt.block_on(async {
-                let state = id_gen_state_store.get_first().await.map_err(|e| format!("load state: {}", e))?;
-                
-                let new_epoch_time = if let Some(s) = state {
-                    s.epoch_time
-                } else {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as i64;
-                    
-                    let max_id = message_store.get_max_message_id().await.unwrap_or(0);
-                    
-                    let mut start_ts = now;
-                    if max_id > 0 {
-                        let existing_ts = max_id >> VF_TIMESTAMP_SHIFT;
-                        if existing_ts + 1 > start_ts {
-                            start_ts = existing_ts + 1;
-                        }
+        let result = async {
+            let state = id_gen_state_store.get_first().await.map_err(|e| format!("load state: {}", e))?;
+
+            let new_epoch_time = if let Some(s) = state {
+                s.epoch_time
+            } else {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+
+                let max_id = message_store.get_max_message_id().await.unwrap_or(0);
+
+                let mut start_ts = now;
+                if max_id > 0 {
+                    let existing_ts = max_id >> VF_TIMESTAMP_SHIFT;
+                    if existing_ts + 1 > start_ts {
+                        start_ts = existing_ts + 1;
                     }
-                    
-                    let init_state = crate::store::IdGeneratorState {
-                        id: 0,
-                        last_ts: start_ts + 10_000,
-                        epoch_time: cfg_epoch_time,
-                    };
-                    
-                    id_gen_state_store.insert(&init_state).await
-                        .map_err(|e| format!("insert state: {}", e))?;
-                    
-                    cfg_epoch_time
+                }
+
+                let init_state = crate::store::IdGeneratorState {
+                    id: 0,
+                    last_ts: start_ts + 10_000,
+                    epoch_time: cfg_epoch_time,
                 };
-                
-                *epoch_time.lock().unwrap() = new_epoch_time;
-                
-                Ok::<_, String>(())
-            });
-            
-            if let Err(e) = result {
-                tracing::error!("id generator init from db failed: {}", e);
-                std::process::exit(1);
-            }
-            
-            let result = rt.block_on(async {
-                Self::fetch_new_segment_locked(
-                    &pool,
-                    &id_gen_state_store,
-                    node_id,
-                    &segments,
-                ).await
-            });
-            
-            if let Err(e) = result {
-                tracing::error!("id generator first segment fetch failed: {}", e);
-                std::process::exit(1);
-            }
-            
-            init_done.notify_waiters();
-        });
+
+                id_gen_state_store.insert(&init_state).await
+                    .map_err(|e| format!("insert state: {}", e))?;
+
+                cfg_epoch_time
+            };
+
+            *epoch_time.lock().unwrap() = new_epoch_time;
+
+            Ok::<_, String>(())
+        }.await;
+
+        if let Err(e) = result {
+            tracing::error!("id generator init from db failed: {}", e);
+            std::process::exit(1);
+        }
+
+        let result = Self::fetch_new_segment_locked(
+            &pool,
+            &id_gen_state_store,
+            node_id,
+            &segments,
+        ).await;
+
+        if let Err(e) = result {
+            tracing::error!("id generator first segment fetch failed: {}", e);
+            std::process::exit(1);
+        }
+
+        init_done.notify_waiters();
     }
 
     pub async fn wait_init(&self) {
