@@ -33,7 +33,7 @@ pub struct JwtService {
 }
 
 impl JwtService {
-    pub fn new(pool: PgPool, secret: &str, issuer: &str, expires_in_minutes: i64) -> Self {
+    pub async fn new(pool: PgPool, secret: &str, issuer: &str, expires_in_minutes: i64) -> Self {
         let service = Self {
             pool,
             secret: secret.as_bytes().to_vec(),
@@ -41,25 +41,17 @@ impl JwtService {
             expires_in_minutes,
             blacklist_cache: Arc::new(RwLock::new(HashMap::new())),
         };
-        service.load_blacklist_from_db();
+        service.load_blacklist_from_db().await;
         service
     }
 
-    fn load_blacklist_from_db(&self) {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                tracing::error!("failed to create runtime for loading JWT blacklist: {}", e);
-                return;
-            }
-        };
-        
-        let result = rt.block_on(async {
+    async fn load_blacklist_from_db(&self) {
+        let result = {
             let query = r#"SELECT jti, expires_at FROM jwt_blacklist"#;
             sqlx::query_as::<_, (String, i64)>(query)
                 .fetch_all(&self.pool)
                 .await
-        });
+        };
 
         match result {
             Ok(rows) => {

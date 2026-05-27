@@ -57,8 +57,8 @@ jobs:
       - name: Package binaries
         run: |
           mkdir -p release-assets
-          tar czf release-assets/vortex---x86_64-unknown-linux-gnu.tar.gz -C target/x86_64-unknown-linux-gnu/release vortex--
-          tar czf release-assets/vortex---aarch64-unknown-linux-gnu.tar.gz -C target/aarch64-unknown-linux-gnu/release vortex--
+          mv target/x86_64-unknown-linux-gnu/release/vortex-- release-assets/vortex--x86_64-unknown-linux-gnu
+          mv target/aarch64-unknown-linux-gnu/release/vortex-- release-assets/vortex--aarch64-unknown-linux-gnu
 
       - name: Check if release already exists
         id: check_release

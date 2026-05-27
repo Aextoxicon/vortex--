@@ -114,7 +114,11 @@ impl Service {
             }
         }
 
-        let pwd_hash = bcrypt::hash(password.as_bytes(), self.cfg.bcrypt_cost as u32)
+        let cost = self.cfg.bcrypt_cost as u32;
+        let pwd = password.clone();
+        let pwd_hash = tokio::task::spawn_blocking(move || bcrypt::hash(pwd.as_bytes(), cost))
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &format!("hash task failed: {}", e)))?
             .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &format!("password hashing failed: {}", e)))?;
 
         let public_id = crate::shared::generate_nano_id(self.cfg.public_id_length as usize);
@@ -240,8 +244,12 @@ impl Service {
         Ok(())
     }
 
-    pub fn validate_credentials(&self, user: &User, password: &str) -> Result<(), AppError> {
-        bcrypt::verify(password, &user.pwd_hash)
+    pub async fn validate_credentials(&self, user: &User, password: &str) -> Result<(), AppError> {
+        let pwd = password.to_string();
+        let hash = user.pwd_hash.clone();
+        tokio::task::spawn_blocking(move || bcrypt::verify(pwd, &hash))
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &format!("verify task failed: {}", e)))?
             .map_err(|_| AppError::new(StatusCode::UNAUTHORIZED, "invalid credentials"))
             .and_then(|valid| {
                 if valid {
@@ -293,7 +301,7 @@ pub async fn login(
 
     let user = state.svc.get_user_by_username(&req.username).await?;
 
-    let result = state.svc.validate_credentials(&user, &req.password);
+    let result = state.svc.validate_credentials(&user, &req.password).await;
 
     if let Err(e) = result {
         rate_limiter.record_failure(&username);

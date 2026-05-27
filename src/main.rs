@@ -102,7 +102,7 @@ async fn main() {
         &cfg.jwt_secret,
         &cfg.jwt_issuer,
         cfg.jwt_expires_minutes,
-    );
+    ).await;
     jwt_service.start_cleanup(std::time::Duration::from_secs(3600));
 
     let app_state = Arc::new(AppState {
