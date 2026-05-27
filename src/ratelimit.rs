@@ -81,7 +81,7 @@ impl RateLimiter {
         let shard = self.get_shard(public_id);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time should always be valid")
             .as_nanos() as i64;
         let interval_ns = interval.as_nanos() as i64;
 
@@ -98,7 +98,7 @@ impl RateLimiter {
     pub fn cleanup_expired(&self, ttl: Duration) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time should always be valid")
             .as_nanos() as i64;
         let ttl_ns = ttl.as_nanos() as i64;
 
@@ -150,7 +150,7 @@ impl RateLimiter {
         if fail_count >= max_failures {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .expect("system time should always be valid")
                 .as_nanos() as i64;
             let interval_ns = interval.as_nanos() as i64;
 

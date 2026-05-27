@@ -48,7 +48,7 @@ impl IdSegment {
 pub struct IdGenerator {
     pool: PgPool,
     node_id: i64,
-    epoch_time: Arc<Mutex<i64>>,
+    epoch_time: Arc<AtomicI64>,
     segments: Arc<Mutex<Vec<IdSegment>>>,
     prefetch_semaphore: Arc<Semaphore>,
     id_gen_state_store: crate::store::IdGeneratorStateStore,
@@ -82,7 +82,7 @@ impl IdGenerator {
         Self {
             pool,
             node_id,
-            epoch_time: Arc::new(Mutex::new(epoch_time)),
+            epoch_time: Arc::new(AtomicI64::new(epoch_time)),
             segments: Arc::new(Mutex::new(Vec::with_capacity(2))),
             prefetch_semaphore: Arc::new(Semaphore::new(1)),
             id_gen_state_store,
@@ -99,7 +99,7 @@ impl IdGenerator {
         let id_gen_state_store = self.id_gen_state_store.clone();
         let message_store = self.message_store.clone();
         let init_done = self.init_done.clone();
-        let cfg_epoch_time = *epoch_time.lock().unwrap();
+        let cfg_epoch_time = epoch_time.load(Ordering::Relaxed);
 
         let result = async {
             let state = id_gen_state_store.get_first().await.map_err(|e| format!("load state: {}", e))?;
@@ -109,7 +109,7 @@ impl IdGenerator {
             } else {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .expect("system time should always be valid")
                     .as_millis() as i64;
 
                 let max_id = message_store.get_max_message_id().await.unwrap_or(0);
@@ -134,7 +134,7 @@ impl IdGenerator {
                 cfg_epoch_time
             };
 
-            *epoch_time.lock().unwrap() = new_epoch_time;
+            epoch_time.store(new_epoch_time, Ordering::Relaxed);
 
             Ok::<_, String>(())
         }.await;
@@ -168,7 +168,7 @@ impl IdGenerator {
 
         loop {
             let seg = {
-                let segments = self.segments.lock().unwrap();
+                let segments = self.segments.lock().expect("segments mutex poisoned");
                 segments.first().cloned()
             };
 
@@ -191,7 +191,7 @@ impl IdGenerator {
             }
 
             {
-                let mut segments = self.segments.lock().unwrap();
+                let mut segments = self.segments.lock().expect("segments mutex poisoned");
                 if !segments.is_empty() {
                     segments.remove(0);
                 }
@@ -208,7 +208,7 @@ impl IdGenerator {
 
     fn try_prefetch(&self, current: &IdSegment) {
         let should_prefetch = {
-            let segments = self.segments.lock().unwrap();
+            let segments = self.segments.lock().expect("segments mutex poisoned");
             current.remaining() > 32768 || segments.len() >= 2
         };
 
@@ -240,7 +240,7 @@ impl IdGenerator {
         segments: &Arc<Mutex<Vec<IdSegment>>>,
     ) -> Result<(), String> {
         {
-            let segs = segments.lock().unwrap();
+            let segs = segments.lock().expect("segments mutex poisoned");
             if !segs.is_empty() {
                 return Ok(());
             }
@@ -258,7 +258,7 @@ impl IdGenerator {
         } else {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .expect("system time should always be valid")
                 .as_millis() as i64
         };
 
@@ -290,7 +290,7 @@ impl IdGenerator {
         tx.commit().await.map_err(|e| format!("commit tx: {}", e))?;
 
         {
-            let mut segs = segments.lock().unwrap();
+            let mut segs = segments.lock().expect("segments mutex poisoned");
             segs.push(seg);
         }
 
@@ -302,7 +302,7 @@ impl IdGenerator {
     }
 
     pub fn get_epoch_time(&self) -> i64 {
-        *self.epoch_time.lock().unwrap()
+        self.epoch_time.load(Ordering::Relaxed)
     }
 
     pub fn calculate_next_id(&self, current_ts: i64, current_seq: i64) -> Result<(i64, i64, i64), String> {

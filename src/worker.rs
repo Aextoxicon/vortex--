@@ -247,7 +247,10 @@ async fn drop_expired_partitions(pool: &PgPool, _msg_store: &MessageStore, reten
             Err(_) => continue,
         };
 
-        let partition_utc = partition_date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let partition_utc = partition_date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight (00:00:00) should always be a valid time")
+            .and_utc();
 
         if partition_utc < cutoff {
             let quoted = format!("\"{}\"", partition.replace('"', "\"\""));
@@ -286,7 +289,10 @@ pub fn calculate_next_monday_delay() -> Duration {
     let days_until_monday = (8 - now.weekday().num_days_from_sunday() as i32) % 7;
     let days_until_monday = if days_until_monday == 0 { 7 } else { days_until_monday };
     let next_monday = now.date_naive() + Duration::days(days_until_monday as i64);
-    let next_monday_utc = next_monday.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let next_monday_utc = next_monday
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight (00:00:00) should always be a valid time")
+        .and_utc();
     next_monday_utc - now
 }
 

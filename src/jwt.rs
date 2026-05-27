@@ -46,7 +46,14 @@ impl JwtService {
     }
 
     fn load_blacklist_from_db(&self) {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!("failed to create runtime for loading JWT blacklist: {}", e);
+                return;
+            }
+        };
+        
         let result = rt.block_on(async {
             let query = r#"SELECT jti, expires_at FROM jwt_blacklist"#;
             sqlx::query_as::<_, (String, i64)>(query)

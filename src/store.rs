@@ -256,7 +256,7 @@ impl MessageIdempotencyStore {
     ) -> Result<(bool, i64), sqlx::Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time should always be valid")
             .as_millis() as i64;
 
         let query = r#"
@@ -324,7 +324,7 @@ impl MessageIdempotencyStore {
     pub async fn delete_stale(&self, retention_ms: i64) -> Result<u64, sqlx::Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time should always be valid")
             .as_millis() as i64;
         let cutoff = now - retention_ms;
 
@@ -578,8 +578,22 @@ impl MessageStore {
         let date = chrono::NaiveDate::parse_from_str(date_str, "%Y%m%d")
             .map_err(|e| sqlx::Error::Decode(format!("invalid date: {}", e).into()))?;
 
-        let start_of_day = date.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() - self.store.epoch_time;
-        let end_of_day = date.succ_opt().unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() - self.store.epoch_time;
+        let start_of_day = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| sqlx::Error::Decode("midnight (00:00:00) should always be valid".into()))?
+            .and_utc()
+            .timestamp_millis()
+            - self.store.epoch_time;
+
+        let next_day = date
+            .succ_opt()
+            .ok_or_else(|| sqlx::Error::Decode("date should have a next day".into()))?;
+        let end_of_day = next_day
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| sqlx::Error::Decode("midnight (00:00:00) should always be valid".into()))?
+            .and_utc()
+            .timestamp_millis()
+            - self.store.epoch_time;
 
         let quoted = table_name.replace("'", "''");
 
