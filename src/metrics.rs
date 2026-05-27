@@ -49,15 +49,15 @@ fn get_memory_info() -> serde_json::Value {
             let mut rss = 0;
             let mut vm = 0;
             for line in status.lines() {
-                if let Some(val) = line.strip_prefix("VmRSS:") {
-                    if let Ok(v) = val.trim().trim_end_matches("kB").parse::<u64>() {
-                        rss = v;
-                    }
+                if let Some(val) = line.strip_prefix("VmRSS:")
+                    && let Ok(v) = val.trim().trim_end_matches("kB").parse::<u64>()
+                {
+                    rss = v;
                 }
-                if let Some(val) = line.strip_prefix("VmSize:") {
-                    if let Ok(v) = val.trim().trim_end_matches("kB").parse::<u64>() {
-                        vm = v;
-                    }
+                if let Some(val) = line.strip_prefix("VmSize:")
+                    && let Ok(v) = val.trim().trim_end_matches("kB").parse::<u64>()
+                {
+                    vm = v;
                 }
             }
             return json!({
@@ -78,10 +78,10 @@ fn get_thread_count() -> usize {
     {
         if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
             for line in status.lines() {
-                if let Some(val) = line.strip_prefix("Threads:") {
-                    if let Ok(v) = val.trim().parse::<usize>() {
-                        return v;
-                    }
+                if let Some(val) = line.strip_prefix("Threads:")
+                    && let Ok(v) = val.trim().parse::<usize>()
+                {
+                    return v;
                 }
             }
         }
