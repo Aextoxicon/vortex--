@@ -1,16 +1,30 @@
 mod test_utils;
 
-use vortex__::worker::{calculate_days_to_sunday, calculate_next_monday_delay, message_table_name_by_date};
+use vortex__::worker::{
+    calculate_days_to_sunday, calculate_next_monday_delay, message_table_name_by_date,
+};
 
 #[test]
 fn test_message_table_name_by_date() {
-    let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
     assert_eq!(message_table_name_by_date(date), "messages_20260101");
 
-    let date = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 12, 31)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
     assert_eq!(message_table_name_by_date(date), "messages_20261231");
 
-    let date = chrono::NaiveDate::from_ymd_opt(2026, 6, 15).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 6, 15)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
     assert_eq!(message_table_name_by_date(date), "messages_20260615");
 }
 

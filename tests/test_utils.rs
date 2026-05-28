@@ -20,26 +20,26 @@ pub struct TestFixture {
 impl TestFixture {
     pub async fn new() -> Self {
         let container = Postgres::default().start().await.unwrap();
-        
+
         let host = container.get_host().await.unwrap();
         let host_port = container.get_host_port_ipv4(5432).await.unwrap();
-        
+
         let database_url = format!(
             "postgres://postgres:postgres@{}:{}/postgres",
             host, host_port
         );
-        
+
         let pool = PgPool::connect(&database_url)
             .await
             .expect("failed to connect to test database");
-        
+
         vortex__::migration::run_migrations(&pool)
             .await
             .expect("failed to run migrations");
-        
+
         Self { pool, container }
     }
-    
+
     pub async fn cleanup(&self) {
         let _ = sqlx::query("DROP TABLE IF EXISTS users CASCADE")
             .execute(&self.pool)

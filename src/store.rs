@@ -122,7 +122,10 @@ impl UserStore {
         Self { store }
     }
 
-    pub async fn get_by_ids(&self, ids: &[i64]) -> Result<std::collections::HashMap<i64, User>, sqlx::Error> {
+    pub async fn get_by_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, User>, sqlx::Error> {
         if ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
@@ -208,12 +211,13 @@ impl UserStore {
         Ok(result.rows_affected())
     }
 
-    pub async fn delete_tx(&self, tx: &mut Transaction<'_, Postgres>, id: i64) -> Result<u64, sqlx::Error> {
+    pub async fn delete_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        id: i64,
+    ) -> Result<u64, sqlx::Error> {
         let query = r#"DELETE FROM users WHERE id = $1"#;
-        let result = sqlx::query(query)
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
+        let result = sqlx::query(query).bind(id).execute(&mut **tx).await?;
         Ok(result.rows_affected())
     }
 
@@ -548,7 +552,11 @@ impl MessageStore {
 
         let max_msg_id = messages.last().map(|m| m.msg_id).unwrap_or(0);
 
-        Ok(MessagePage { messages, has_more, max_msg_id })
+        Ok(MessagePage {
+            messages,
+            has_more,
+            max_msg_id,
+        })
     }
 
     pub async fn get_message_count(&self, conv_id: &str) -> Result<i64, sqlx::Error> {
@@ -580,7 +588,9 @@ impl MessageStore {
 
         let start_of_day = date
             .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| sqlx::Error::Decode("midnight (00:00:00) should always be valid".into()))?
+            .ok_or_else(|| {
+                sqlx::Error::Decode("midnight (00:00:00) should always be valid".into())
+            })?
             .and_utc()
             .timestamp_millis()
             - self.store.epoch_time;
@@ -590,7 +600,9 @@ impl MessageStore {
             .ok_or_else(|| sqlx::Error::Decode("date should have a next day".into()))?;
         let end_of_day = next_day
             .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| sqlx::Error::Decode("midnight (00:00:00) should always be valid".into()))?
+            .ok_or_else(|| {
+                sqlx::Error::Decode("midnight (00:00:00) should always be valid".into())
+            })?
             .and_utc()
             .timestamp_millis()
             - self.store.epoch_time;
@@ -608,7 +620,8 @@ impl MessageStore {
 
         let create_index_query = format!(
             r#"CREATE INDEX IF NOT EXISTS idx_msg_conv_ts_{} ON {} (conv_id, ts DESC)"#,
-            &table_name[9..], quoted
+            &table_name[9..],
+            quoted
         );
         sqlx::query(&create_index_query)
             .execute(&self.store.pool)
@@ -616,7 +629,8 @@ impl MessageStore {
 
         let create_index_query2 = format!(
             r#"CREATE INDEX IF NOT EXISTS idx_msg_from_uid_{} ON {} (from_uid)"#,
-            &table_name[9..], quoted
+            &table_name[9..],
+            quoted
         );
         sqlx::query(&create_index_query2)
             .execute(&self.store.pool)
@@ -843,10 +857,7 @@ impl GroupMemberStore {
         uid: i64,
     ) -> Result<u64, sqlx::Error> {
         let query = r#"DELETE FROM group_members WHERE uid = $1"#;
-        let result = sqlx::query(query)
-            .bind(uid)
-            .execute(&mut **tx)
-            .await?;
+        let result = sqlx::query(query).bind(uid).execute(&mut **tx).await?;
         Ok(result.rows_affected())
     }
 
@@ -865,15 +876,13 @@ impl GroupMemberStore {
         group_id: &str,
     ) -> Result<u64, sqlx::Error> {
         let query = r#"DELETE FROM group_members WHERE group_id = $1"#;
-        let result = sqlx::query(query)
-            .bind(group_id)
-            .execute(&mut **tx)
-            .await?;
+        let result = sqlx::query(query).bind(group_id).execute(&mut **tx).await?;
         Ok(result.rows_affected())
     }
 
     pub async fn is_member(&self, group_id: &str, uid: i64) -> Result<bool, sqlx::Error> {
-        let query = r#"SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND uid = $2)"#;
+        let query =
+            r#"SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND uid = $2)"#;
         let exists: bool = sqlx::query_scalar(query)
             .bind(group_id)
             .bind(uid)
@@ -888,7 +897,8 @@ impl GroupMemberStore {
         group_id: &str,
         uid: i64,
     ) -> Result<bool, sqlx::Error> {
-        let query = r#"SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND uid = $2)"#;
+        let query =
+            r#"SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND uid = $2)"#;
         let exists: bool = sqlx::query_scalar(query)
             .bind(group_id)
             .bind(uid)
@@ -1021,11 +1031,7 @@ impl FriendRequestStore {
         Ok(exists)
     }
 
-    pub async fn are_friends(
-        &self,
-        user_id_1: i64,
-        user_id_2: i64,
-    ) -> Result<bool, sqlx::Error> {
+    pub async fn are_friends(&self, user_id_1: i64, user_id_2: i64) -> Result<bool, sqlx::Error> {
         let query = r#"
             SELECT EXISTS(
                 SELECT 1 FROM friend_requests

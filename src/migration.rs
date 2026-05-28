@@ -34,17 +34,13 @@ async fn create_users_table(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        r#"CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)"#,
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)"#)
+        .execute(pool)
+        .await?;
 
-    sqlx::query(
-        r#"CREATE INDEX IF NOT EXISTS idx_users_public_id ON users (public_id)"#,
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_users_public_id ON users (public_id)"#)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }
@@ -66,11 +62,9 @@ async fn create_groups_table(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        r#"CREATE INDEX IF NOT EXISTS idx_groups_owner_id ON groups (owner_id)"#,
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_groups_owner_id ON groups (owner_id)"#)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }
@@ -91,11 +85,9 @@ async fn create_group_members_table(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        r#"CREATE INDEX IF NOT EXISTS idx_group_members_uid ON group_members (uid)"#,
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_group_members_uid ON group_members (uid)"#)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }

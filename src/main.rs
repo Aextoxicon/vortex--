@@ -42,7 +42,10 @@ async fn main() {
     let epoch_time = 1609459200000i64;
     let store = store::Store::new(pool.clone(), epoch_time);
     let rate_limiter = RateLimiter::new();
-    rate_limiter.start_cleanup(std::time::Duration::from_secs(300), std::time::Duration::from_secs(600));
+    rate_limiter.start_cleanup(
+        std::time::Duration::from_secs(300),
+        std::time::Duration::from_secs(600),
+    );
 
     let user_store = store::UserStore::new(store.clone());
     let msg_store = store::MessageStore::new(store.clone());
@@ -53,7 +56,13 @@ async fn main() {
     let id_gen_state_store = store::IdGeneratorStateStore::new(store.clone());
     let idempotency_store = store::MessageIdempotencyStore::new(store.clone());
 
-    let id_gen = idgen::IdGenerator::new(pool.clone(), id_gen_state_store.clone(), msg_store.clone(), cfg.node_id, epoch_time);
+    let id_gen = idgen::IdGenerator::new(
+        pool.clone(),
+        id_gen_state_store.clone(),
+        msg_store.clone(),
+        cfg.node_id,
+        epoch_time,
+    );
     id_gen.init().await;
 
     let s3_service = if !cfg.s3_url.is_empty() {
@@ -102,7 +111,8 @@ async fn main() {
         &cfg.jwt_secret,
         &cfg.jwt_issuer,
         cfg.jwt_expires_minutes,
-    ).await;
+    )
+    .await;
     jwt_service.start_cleanup(std::time::Duration::from_secs(3600));
 
     let app_state = Arc::new(AppState {
@@ -113,7 +123,12 @@ async fn main() {
 
     let app = setup_routes(app_state);
 
-    let worker = worker::Worker::new(cfg.clone(), pool.clone(), msg_store.clone(), idempotency_store.clone());
+    let worker = worker::Worker::new(
+        cfg.clone(),
+        pool.clone(),
+        msg_store.clone(),
+        idempotency_store.clone(),
+    );
 
     let mut create_err = None;
     for i in 0..3 {
@@ -160,46 +175,39 @@ async fn main() {
 
     let shutdown_signal = shutdown_signal();
 
-    axum::serve(
-        listener,
-        app.into_make_service(),
-    )
-    .with_graceful_shutdown(async move {
-        shutdown_signal.await;
-        tracing::info!("shutting down gracefully...");
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(async move {
+            shutdown_signal.await;
+            tracing::info!("shutting down gracefully...");
 
-        let cleanup_done = tokio::spawn(async move {
-            worker.stop().await;
-        });
+            let cleanup_done = tokio::spawn(async move {
+                worker.stop().await;
+            });
 
-        let force_shutdown = tokio::spawn(async {
-            if let Ok(()) = signal::ctrl_c().await {
-                tracing::warn!("second signal received, forcing shutdown");
-                std::process::exit(1);
+            let force_shutdown = tokio::spawn(async {
+                if let Ok(()) = signal::ctrl_c().await {
+                    tracing::warn!("second signal received, forcing shutdown");
+                    std::process::exit(1);
+                }
+            });
+
+            tokio::select! {
+                _ = cleanup_done => {}
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    tracing::warn!("cleanup timed out, proceeding with server shutdown");
+                }
+                _ = force_shutdown => {}
             }
+        })
+        .await
+        .unwrap_or_else(|err| {
+            tracing::error!(error = %err, "server forced to shutdown");
         });
-
-        tokio::select! {
-            _ = cleanup_done => {}
-            _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                tracing::warn!("cleanup timed out, proceeding with server shutdown");
-            }
-            _ = force_shutdown => {}
-        }
-    })
-    .await
-    .unwrap_or_else(|err| {
-        tracing::error!(error = %err, "server forced to shutdown");
-    });
 }
 
 fn init_logging() {
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .json()
-                .with_target(false),
-        )
+        .with(tracing_subscriber::fmt::layer().json().with_target(false))
         .init();
 }
 
@@ -215,22 +223,13 @@ async fn init_db(cfg: &Config) -> Result<sqlx::PgPool, String> {
 
 fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
     let public_routes = Router::new()
-        .route(
-            "/auth/register",
-            axum::routing::post(account::register),
-        )
-        .route(
-            "/auth/login",
-            axum::routing::post(account::login),
-        );
+        .route("/auth/register", axum::routing::post(account::register))
+        .route("/auth/login", axum::routing::post(account::login));
 
     let protected_routes = Router::new()
         .route("/auth/me", axum::routing::get(account::get_me))
         .route("/auth/logout", axum::routing::post(account::logout))
-        .route(
-            "/auth/:public_id",
-            axum::routing::put(account::update_user),
-        )
+        .route("/auth/:public_id", axum::routing::put(account::update_user))
         .route(
             "/auth/:public_id",
             axum::routing::delete(account::delete_user),
@@ -239,18 +238,12 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
             "/messages/send",
             axum::routing::post(messaging::send_message),
         )
-        .route(
-            "/messages",
-            axum::routing::get(messaging::get_messages),
-        )
+        .route("/messages", axum::routing::get(messaging::get_messages))
         .route(
             "/messages/recall/:msg_id",
             axum::routing::post(messaging::recall_message),
         )
-        .route(
-            "/check",
-            axum::routing::get(messaging::check_new_messages),
-        )
+        .route("/check", axum::routing::get(messaging::check_new_messages))
         .route(
             "/conversations",
             axum::routing::get(messaging::get_conversations),
@@ -263,26 +256,11 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
             "/blocks/:target_public_id",
             axum::routing::delete(friend::unblock_user),
         )
-        .route(
-            "/groups",
-            axum::routing::post(groups::create_group),
-        )
-        .route(
-            "/groups/:id",
-            axum::routing::get(groups::get_group),
-        )
-        .route(
-            "/groups/:id",
-            axum::routing::put(groups::update_group),
-        )
-        .route(
-            "/groups/:id",
-            axum::routing::delete(groups::delete_group),
-        )
-        .route(
-            "/groups/:id/join",
-            axum::routing::post(groups::join_group),
-        )
+        .route("/groups", axum::routing::post(groups::create_group))
+        .route("/groups/:id", axum::routing::get(groups::get_group))
+        .route("/groups/:id", axum::routing::put(groups::update_group))
+        .route("/groups/:id", axum::routing::delete(groups::delete_group))
+        .route("/groups/:id/join", axum::routing::post(groups::join_group))
         .route(
             "/groups/:id/leave",
             axum::routing::post(groups::leave_group),
@@ -311,10 +289,7 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
             "/friends/request/:request_id",
             axum::routing::delete(friend::cancel_friend_request),
         )
-        .route(
-            "/files/presign",
-            axum::routing::post(s3::presign),
-        );
+        .route("/files/presign", axum::routing::post(s3::presign));
 
     let api_routes = public_routes.merge(protected_routes);
 
@@ -339,21 +314,27 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
                         uri = %request.uri(),
                     )
                 })
-                .on_response(|response: &axum::http::Response<_>, latency: Duration, _span: &tracing::Span| {
-                    let path = response.extensions().get::<String>();
-                    if let Some(path_str) = path && (path_str == "/health" || path_str == "/ready") {
-                        return;
-                    }
+                .on_response(
+                    |response: &axum::http::Response<_>,
+                     latency: Duration,
+                     _span: &tracing::Span| {
+                        let path = response.extensions().get::<String>();
+                        if let Some(path_str) = path
+                            && (path_str == "/health" || path_str == "/ready")
+                        {
+                            return;
+                        }
 
-                    let status = response.status();
-                    if latency.as_millis() > 500 || status.as_u16() >= 400 {
-                        tracing::info!(
-                            latency_ms = latency.as_millis(),
-                            status = status.as_u16(),
-                            "slow/error request"
-                        );
-                    }
-                }),
+                        let status = response.status();
+                        if latency.as_millis() > 500 || status.as_u16() >= 400 {
+                            tracing::info!(
+                                latency_ms = latency.as_millis(),
+                                status = status.as_u16(),
+                                "slow/error request"
+                            );
+                        }
+                    },
+                ),
         );
 
     app.with_state((*app_state).clone())

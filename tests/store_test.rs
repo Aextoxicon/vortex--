@@ -70,7 +70,11 @@ async fn test_user_store_get_by_username() {
 
     user_store.insert(&user).await.unwrap();
 
-    let found = user_store.get_by_username(&username).await.unwrap().unwrap();
+    let found = user_store
+        .get_by_username(&username)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(found.username, username);
 }
 
@@ -94,7 +98,11 @@ async fn test_user_store_get_by_public_id() {
 
     user_store.insert(&user).await.unwrap();
 
-    let found = user_store.get_by_public_id(&public_id).await.unwrap().unwrap();
+    let found = user_store
+        .get_by_public_id(&public_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(found.public_id, public_id);
 }
 
@@ -153,7 +161,10 @@ async fn test_group_member_store_insert() {
 
     group_mem_store.insert(&member).await.unwrap();
 
-    let is_member = group_mem_store.is_member("group123", user.id).await.unwrap();
+    let is_member = group_mem_store
+        .is_member("group123", user.id)
+        .await
+        .unwrap();
     assert!(is_member);
 }
 
@@ -176,9 +187,15 @@ async fn test_group_member_store_remove() {
     };
 
     group_mem_store.insert(&member).await.unwrap();
-    group_mem_store.delete_by_group_and_user("group123", user.id).await.unwrap();
+    group_mem_store
+        .delete_by_group_and_user("group123", user.id)
+        .await
+        .unwrap();
 
-    let is_member = group_mem_store.is_member("group123", user.id).await.unwrap();
+    let is_member = group_mem_store
+        .is_member("group123", user.id)
+        .await
+        .unwrap();
     assert!(!is_member);
 }
 

@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use chrono::Utc;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -93,7 +93,10 @@ impl Service {
             is_recalled: 0,
         };
 
-        self.msg_store.insert_message(&msg).await.map_err(|e| e.to_string())?;
+        self.msg_store
+            .insert_message(&msg)
+            .await
+            .map_err(|e| e.to_string())?;
 
         Ok(msg_id)
     }
@@ -148,30 +151,37 @@ impl Service {
         Ok(())
     }
 
-    pub async fn get_user_by_public_id(&self, public_id: &str) -> Result<crate::store::User, crate::error::AppError> {
+    pub async fn get_user_by_public_id(
+        &self,
+        public_id: &str,
+    ) -> Result<crate::store::User, crate::error::AppError> {
         let user = self
             .user_store
             .get_by_public_id(public_id)
             .await
-            .map_err(|e| crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| {
+                crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            })?;
         user.ok_or_else(|| crate::error::AppError::not_found("user not found"))
     }
 
-    pub async fn get_user_by_id(&self, user_id: i64) -> Result<crate::store::User, crate::error::AppError> {
-        let user = self
-            .user_store
-            .get_by_id(user_id)
-            .await
-            .map_err(|e| crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    pub async fn get_user_by_id(
+        &self,
+        user_id: i64,
+    ) -> Result<crate::store::User, crate::error::AppError> {
+        let user = self.user_store.get_by_id(user_id).await.map_err(|e| {
+            crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+        })?;
         user.ok_or_else(|| crate::error::AppError::not_found("user not found"))
     }
 
-    pub async fn get_public_id_by_user_id(&self, user_id: i64) -> Result<String, crate::error::AppError> {
-        let user = self
-            .user_store
-            .get_by_id(user_id)
-            .await
-            .map_err(|e| crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    pub async fn get_public_id_by_user_id(
+        &self,
+        user_id: i64,
+    ) -> Result<String, crate::error::AppError> {
+        let user = self.user_store.get_by_id(user_id).await.map_err(|e| {
+            crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+        })?;
         let user = user.ok_or_else(|| crate::error::AppError::not_found("user not found"))?;
         Ok(user.public_id)
     }
@@ -180,25 +190,35 @@ impl Service {
         &self,
         ids: &[i64],
     ) -> Result<std::collections::HashMap<i64, crate::store::User>, crate::error::AppError> {
-        self.user_store
-            .get_by_ids(ids)
-            .await
-            .map_err(|e| crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+        self.user_store.get_by_ids(ids).await.map_err(|e| {
+            crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+        })
     }
 
-    pub async fn is_user_in_group(&self, group_id: &str, user_id: i64) -> Result<bool, crate::error::AppError> {
+    pub async fn is_user_in_group(
+        &self,
+        group_id: &str,
+        user_id: i64,
+    ) -> Result<bool, crate::error::AppError> {
         self.group_mem_store
             .is_member(group_id, user_id)
             .await
-            .map_err(|e| crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+            .map_err(|e| {
+                crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            })
     }
 
-    pub async fn get_user_by_username(&self, username: &str) -> Result<crate::store::User, crate::error::AppError> {
+    pub async fn get_user_by_username(
+        &self,
+        username: &str,
+    ) -> Result<crate::store::User, crate::error::AppError> {
         let user = self
             .user_store
             .get_by_username(username)
             .await
-            .map_err(|e| crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| {
+                crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            })?;
         user.ok_or_else(|| crate::error::AppError::not_found("user not found"))
     }
 }
@@ -224,9 +244,7 @@ pub struct NotificationPayload {
     pub data: HashMap<String, serde_json::Value>,
 }
 
-pub async fn health_check(
-    State(state): State<crate::AppState>,
-) -> impl IntoResponse + use<> {
+pub async fn health_check(State(state): State<crate::AppState>) -> impl IntoResponse + use<> {
     Json(json!({
         "status": "ok",
         "node_id": state.svc.cfg.node_id,
@@ -234,9 +252,7 @@ pub async fn health_check(
     }))
 }
 
-pub async fn readiness_check(
-    State(state): State<crate::AppState>,
-) -> impl IntoResponse + use<> {
+pub async fn readiness_check(State(state): State<crate::AppState>) -> impl IntoResponse + use<> {
     if let Err(e) = state.svc.pool.acquire().await {
         return (
             StatusCode::SERVICE_UNAVAILABLE,

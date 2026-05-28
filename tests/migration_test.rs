@@ -5,7 +5,7 @@ use test_utils::TestFixture;
 #[tokio::test]
 async fn test_run_migrations() {
     let fixture = TestFixture::new().await;
-    
+
     let tables = vec![
         "users",
         "groups",
@@ -24,7 +24,7 @@ async fn test_run_migrations() {
                 SELECT FROM information_schema.tables 
                 WHERE table_schema = 'public' 
                 AND table_name = $1
-            )"
+            )",
         )
         .bind(table)
         .fetch_one(&fixture.pool)
@@ -38,7 +38,7 @@ async fn test_run_migrations() {
 #[tokio::test]
 async fn test_migrations_create_indexes() {
     let fixture = TestFixture::new().await;
-    
+
     let indexes = vec![
         ("users", "idx_users_username"),
         ("users", "idx_users_public_id"),
@@ -47,7 +47,10 @@ async fn test_migrations_create_indexes() {
         ("friend_requests", "idx_friend_requests_pending_unique"),
         ("friend_requests", "idx_friend_requests_from_user_id"),
         ("friend_requests", "idx_friend_requests_to_user_id"),
-        ("conversation_participants", "idx_conversation_participants_user_id"),
+        (
+            "conversation_participants",
+            "idx_conversation_participants_user_id",
+        ),
         ("message_idempotency", "idx_message_idempotency_user_id"),
         ("message_idempotency", "idx_message_idempotency_created_at"),
         ("messages", "idx_messages_conv_ts"),
@@ -60,7 +63,7 @@ async fn test_migrations_create_indexes() {
                 SELECT FROM pg_indexes 
                 WHERE schemaname = 'public' 
                 AND indexname = $1
-            )"
+            )",
         )
         .bind(index)
         .fetch_one(&fixture.pool)

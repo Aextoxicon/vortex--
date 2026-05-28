@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
@@ -16,9 +16,8 @@ static USERNAME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-zA-Z0-9_\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]{3,20}$").unwrap()
 });
 
-static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap()
-});
+static EMAIL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap());
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -92,22 +91,17 @@ impl Service {
             return Err(AppError::bad_request("weak password"));
         }
 
-        let exists = self
-            .user_store
-            .username_exists(&username)
-            .await
-            ?;
+        let exists = self.user_store.username_exists(&username).await?;
 
         if exists {
-            return Err(AppError::new(StatusCode::CONFLICT, "username already exists"));
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "username already exists",
+            ));
         }
 
         if !email.is_empty() {
-            let email_exists = self
-                .user_store
-                .email_exists(&email)
-                .await
-                ?;
+            let email_exists = self.user_store.email_exists(&email).await?;
 
             if email_exists {
                 return Err(AppError::new(StatusCode::CONFLICT, "email already exists"));
@@ -118,8 +112,18 @@ impl Service {
         let pwd = password.clone();
         let pwd_hash = tokio::task::spawn_blocking(move || bcrypt::hash(pwd.as_bytes(), cost))
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &format!("hash task failed: {}", e)))?
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &format!("password hashing failed: {}", e)))?;
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("hash task failed: {}", e),
+                )
+            })?
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("password hashing failed: {}", e),
+                )
+            })?;
 
         let public_id = crate::shared::generate_nano_id(self.cfg.public_id_length as usize);
 
@@ -134,11 +138,7 @@ impl Service {
             updated_at: now,
         };
 
-        let id = self
-            .user_store
-            .insert(&user)
-            .await
-            ?;
+        let id = self.user_store.insert(&user).await?;
 
         Ok(User { id, ..user })
     }
@@ -154,11 +154,15 @@ impl Service {
             return Err(AppError::forbidden());
         }
 
-        if let Some(ref u) = username && !validate_username(u) {
+        if let Some(ref u) = username
+            && !validate_username(u)
+        {
             return Err(AppError::bad_request("invalid username"));
         }
 
-        if let Some(ref e) = email && !validate_email(e) {
+        if let Some(ref e) = email
+            && !validate_email(e)
+        {
             return Err(AppError::bad_request("invalid email"));
         }
 
@@ -193,53 +197,35 @@ impl Service {
         let mut user = user.clone();
         user.updated_at = chrono::Utc::now().timestamp_millis();
 
-        self.user_store
-            .update(&user)
-            .await
-            ?;
+        self.user_store.update(&user).await?;
 
         Ok(())
     }
 
     pub async fn delete_user(&self, user_id: i64) -> Result<(), AppError> {
-        let groups = self
-            .group_store
-            .get_groups_by_owner(user_id)
-            .await
-            ?;
+        let groups = self.group_store.get_groups_by_owner(user_id).await?;
 
         for g in groups {
             self.delete_group(&g.group_id).await?;
         }
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+        let mut tx = self.pool.begin().await?;
 
         self.group_mem_store
             .delete_by_user_tx(&mut tx, user_id)
-            .await
-            ?;
+            .await?;
 
         self.conv_part_store
             .delete_by_user_tx(&mut tx, user_id)
-            .await
-            ?;
+            .await?;
 
         self.friend_store
             .delete_by_user_tx(&mut tx, user_id)
             .await?;
 
-        self.user_store
-            .delete_tx(&mut tx, user_id)
-            .await
-            ?;
+        self.user_store.delete_tx(&mut tx, user_id).await?;
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -249,13 +235,21 @@ impl Service {
         let hash = user.pwd_hash.clone();
         tokio::task::spawn_blocking(move || bcrypt::verify(pwd, &hash))
             .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &format!("verify task failed: {}", e)))?
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("verify task failed: {}", e),
+                )
+            })?
             .map_err(|_| AppError::new(StatusCode::UNAUTHORIZED, "invalid credentials"))
             .and_then(|valid| {
                 if valid {
                     Ok(())
                 } else {
-                    Err(AppError::new(StatusCode::UNAUTHORIZED, "invalid credentials"))
+                    Err(AppError::new(
+                        StatusCode::UNAUTHORIZED,
+                        "invalid credentials",
+                    ))
                 }
             })
     }
@@ -291,12 +285,11 @@ pub async fn login(
     let username = req.username.clone();
     let rate_limiter = state.rate_limiter.clone();
 
-    if !rate_limiter.allow_request_with_max_failures(
-        &username,
-        Duration::from_secs(900),
-        5,
-    ) {
-        return Err(AppError::new(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded"));
+    if !rate_limiter.allow_request_with_max_failures(&username, Duration::from_secs(900), 5) {
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded",
+        ));
     }
 
     let user = state.svc.get_user_by_username(&req.username).await?;
@@ -355,7 +348,10 @@ pub async fn logout(
 
         if let Ok(claims) = state.jwt_service.validate_token(&token_str) {
             let expires_at = claims.exp;
-            let _ = state.jwt_service.blacklist_token(&claims.jti, expires_at).await;
+            let _ = state
+                .jwt_service
+                .blacklist_token(&claims.jti, expires_at)
+                .await;
         }
     }
 

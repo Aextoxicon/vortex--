@@ -102,7 +102,10 @@ impl IdGenerator {
         let cfg_epoch_time = epoch_time.load(Ordering::Relaxed);
 
         let result = async {
-            let state = id_gen_state_store.get_first().await.map_err(|e| format!("load state: {}", e))?;
+            let state = id_gen_state_store
+                .get_first()
+                .await
+                .map_err(|e| format!("load state: {}", e))?;
 
             let new_epoch_time = if let Some(s) = state {
                 s.epoch_time
@@ -128,7 +131,9 @@ impl IdGenerator {
                     epoch_time: cfg_epoch_time,
                 };
 
-                id_gen_state_store.insert(&init_state).await
+                id_gen_state_store
+                    .insert(&init_state)
+                    .await
                     .map_err(|e| format!("insert state: {}", e))?;
 
                 cfg_epoch_time
@@ -137,19 +142,16 @@ impl IdGenerator {
             epoch_time.store(new_epoch_time, Ordering::Relaxed);
 
             Ok::<_, String>(())
-        }.await;
+        }
+        .await;
 
         if let Err(e) = result {
             tracing::error!("id generator init from db failed: {}", e);
             std::process::exit(1);
         }
 
-        let result = Self::fetch_new_segment_locked(
-            &pool,
-            &id_gen_state_store,
-            node_id,
-            &segments,
-        ).await;
+        let result =
+            Self::fetch_new_segment_locked(&pool, &id_gen_state_store, node_id, &segments).await;
 
         if let Err(e) = result {
             tracing::error!("id generator first segment fetch failed: {}", e);
@@ -178,13 +180,14 @@ impl IdGenerator {
                     &self.id_gen_state_store,
                     self.node_id,
                     &self.segments,
-                ).await?;
+                )
+                .await?;
                 continue;
             }
 
             let seg = seg.unwrap();
             let id = seg.next_id();
-            
+
             if id <= seg.end_id {
                 self.try_prefetch(&seg);
                 return Ok(id);
@@ -202,7 +205,8 @@ impl IdGenerator {
                 &self.id_gen_state_store,
                 self.node_id,
                 &self.segments,
-            ).await?;
+            )
+            .await?;
         }
     }
 
@@ -223,12 +227,9 @@ impl IdGenerator {
 
         if self.prefetch_semaphore.try_acquire().is_ok() {
             tokio::spawn(async move {
-                let _ = Self::fetch_new_segment_locked(
-                    &pool,
-                    &id_gen_state_store,
-                    node_id,
-                    &segments,
-                ).await;
+                let _ =
+                    Self::fetch_new_segment_locked(&pool, &id_gen_state_store, node_id, &segments)
+                        .await;
             });
         }
     }
@@ -265,7 +266,8 @@ impl IdGenerator {
         let end_ts = start_ts + 10_000;
 
         let start_id = (start_ts << VF_TIMESTAMP_SHIFT) | (node_id << VF_NODE_ID_SHIFT);
-        let end_id = (end_ts << VF_TIMESTAMP_SHIFT) | (node_id << VF_NODE_ID_SHIFT) | VF_MAX_SEQUENCE;
+        let end_id =
+            (end_ts << VF_TIMESTAMP_SHIFT) | (node_id << VF_NODE_ID_SHIFT) | VF_MAX_SEQUENCE;
 
         let seg = IdSegment::new(start_id, end_id, start_ts, end_ts, node_id);
 
@@ -305,7 +307,11 @@ impl IdGenerator {
         self.epoch_time.load(Ordering::Relaxed)
     }
 
-    pub fn calculate_next_id(&self, current_ts: i64, current_seq: i64) -> Result<(i64, i64, i64), String> {
+    pub fn calculate_next_id(
+        &self,
+        current_ts: i64,
+        current_seq: i64,
+    ) -> Result<(i64, i64, i64), String> {
         if self.node_id < 0 || self.node_id > VF_MAX_NODE_ID {
             return Err(format!("node ID must be between 0 and {}", VF_MAX_NODE_ID));
         }

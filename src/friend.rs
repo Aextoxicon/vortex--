@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Serialize;
 use serde_json::json;
 
@@ -45,22 +45,15 @@ impl Service {
 
         self.get_user_by_id(to_user_id).await?;
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+        let mut tx = self.pool.begin().await?;
 
         let reverse_id = self
             .friend_store
             .accept_pending_tx(&mut tx, to_user_id, from_user_id)
-            .await
-            ?;
+            .await?;
 
         if reverse_id > 0 {
-            tx.commit()
-                .await
-                ?;
+            tx.commit().await?;
 
             let svc = self.clone();
             let reverse_id_str = reverse_id.to_string();
@@ -96,9 +89,7 @@ impl Service {
                 }
             })?;
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         let svc = self.clone();
         let result_str = result.to_string();
@@ -136,17 +127,12 @@ impl Service {
         request_id: i64,
         user_id: i64,
     ) -> Result<(), AppError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+        let mut tx = self.pool.begin().await?;
 
         let from_user_id = self
             .friend_store
             .accept_by_id_tx(&mut tx, request_id, user_id)
-            .await
-            ?;
+            .await?;
 
         if from_user_id == 0 {
             return Err(AppError::not_found("Friend request not found"));
@@ -155,9 +141,7 @@ impl Service {
             return Err(AppError::forbidden());
         }
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         let svc = self.clone();
         let request_id_str = request_id.to_string();
@@ -175,25 +159,18 @@ impl Service {
         request_id: i64,
         user_id: i64,
     ) -> Result<(), AppError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+        let mut tx = self.pool.begin().await?;
 
         let affected = self
             .friend_store
             .reject_tx(&mut tx, request_id, user_id)
-            .await
-            ?;
+            .await?;
 
         if !affected {
             return Err(AppError::not_found("Friend request not found"));
         }
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -203,25 +180,18 @@ impl Service {
         request_id: i64,
         from_user_id: i64,
     ) -> Result<(), AppError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+        let mut tx = self.pool.begin().await?;
 
         let affected = self
             .friend_store
             .cancel_tx(&mut tx, request_id, from_user_id)
-            .await
-            ?;
+            .await?;
 
         if !affected {
             return Err(AppError::not_found("Friend request not found"));
         }
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -242,7 +212,9 @@ impl Service {
 }
 
 fn is_unique_violation(err: &sqlx::Error) -> bool {
-    if let sqlx::Error::Database(db_err) = err && let Some(code) = db_err.code() {
+    if let sqlx::Error::Database(db_err) = err
+        && let Some(code) = db_err.code()
+    {
         return code == "23505";
     }
     false
@@ -307,7 +279,9 @@ pub async fn accept_friend_request(
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse + use<>, AppError> {
-    let request_id: i64 = request_id.parse().map_err(|_| AppError::bad_request("invalid request_id"))?;
+    let request_id: i64 = request_id
+        .parse()
+        .map_err(|_| AppError::bad_request("invalid request_id"))?;
     state.svc.accept_friend_request(request_id, user_id).await?;
 
     Ok(Json(json!({ "message": "Friend request accepted" })))
@@ -318,7 +292,9 @@ pub async fn reject_friend_request(
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse + use<>, AppError> {
-    let request_id: i64 = request_id.parse().map_err(|_| AppError::bad_request("invalid request_id"))?;
+    let request_id: i64 = request_id
+        .parse()
+        .map_err(|_| AppError::bad_request("invalid request_id"))?;
     state.svc.reject_friend_request(request_id, user_id).await?;
 
     Ok(Json(json!({ "message": "Friend request rejected" })))
@@ -329,7 +305,9 @@ pub async fn cancel_friend_request(
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse + use<>, AppError> {
-    let request_id: i64 = request_id.parse().map_err(|_| AppError::bad_request("invalid request_id"))?;
+    let request_id: i64 = request_id
+        .parse()
+        .map_err(|_| AppError::bad_request("invalid request_id"))?;
     state.svc.cancel_friend_request(request_id, user_id).await?;
 
     Ok(StatusCode::NO_CONTENT)

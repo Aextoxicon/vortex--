@@ -91,7 +91,9 @@ fn load_dotenv_map() -> HashMap<String, String> {
 }
 
 fn env_string(dotenv_map: &HashMap<String, String>, key: &str, fallback: &str) -> String {
-    if let Some(v) = dotenv_map.get(key) && !v.is_empty() {
+    if let Some(v) = dotenv_map.get(key)
+        && !v.is_empty()
+    {
         return v.clone();
     }
     match env::var(key) {
@@ -101,7 +103,9 @@ fn env_string(dotenv_map: &HashMap<String, String>, key: &str, fallback: &str) -
 }
 
 fn env_int(dotenv_map: &HashMap<String, String>, key: &str, fallback: i32) -> i32 {
-    if let Some(v) = dotenv_map.get(key) && !v.is_empty() {
+    if let Some(v) = dotenv_map.get(key)
+        && !v.is_empty()
+    {
         match v.parse::<i32>() {
             Ok(n) => return n,
             Err(_) => {
@@ -123,7 +127,9 @@ fn env_int(dotenv_map: &HashMap<String, String>, key: &str, fallback: i32) -> i3
 }
 
 fn env_int64(dotenv_map: &HashMap<String, String>, key: &str, fallback: i64) -> i64 {
-    if let Some(v) = dotenv_map.get(key) && !v.is_empty() {
+    if let Some(v) = dotenv_map.get(key)
+        && !v.is_empty()
+    {
         match v.parse::<i64>() {
             Ok(n) => return n,
             Err(_) => {
@@ -148,7 +154,10 @@ fn generate_jwt_secret() -> Result<String, String> {
     use rand::RngCore;
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
-    Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes))
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        bytes,
+    ))
 }
 
 fn prompt_interactive_jwt() -> Result<String, String> {
@@ -203,7 +212,9 @@ fn prompt_interactive_s3() -> Result<String, String> {
 
     match input {
         "1" => {
-            print!("\nEnter S3 connection string (s3://bucket?endpoint=...&region=...&access_key=...&secret_key=...): ");
+            print!(
+                "\nEnter S3 connection string (s3://bucket?endpoint=...&region=...&access_key=...&secret_key=...): "
+            );
             stdout.flush().unwrap();
             let mut input_url = String::new();
             stdin.lock().read_line(&mut input_url).unwrap();
@@ -332,10 +343,7 @@ impl Config {
             ));
         }
         if self.node_id > VF_MAX_NODE_ID {
-            return Err(format!(
-                "NODE_ID must be between 0 and {}",
-                VF_MAX_NODE_ID
-            ));
+            return Err(format!("NODE_ID must be between 0 and {}", VF_MAX_NODE_ID));
         }
         if self.bcrypt_cost < 10 || self.bcrypt_cost > 15 {
             return Err("BCRYPT_COST must be between 10 and 15".to_string());
@@ -431,7 +439,11 @@ pub fn load_config() -> Config {
         db_max_open_conns: env_int(&dotenv_map, "DB_MAX_OPEN_CONNS", DEFAULT_DB_MAX_OPEN_CONNS),
         db_max_idle_conns: env_int(&dotenv_map, "DB_MAX_IDLE_CONNS", DEFAULT_DB_MAX_IDLE_CONNS),
         jwt_issuer: env_string(&dotenv_map, "JWT_ISSUER", DEFAULT_JWT_ISSUER),
-        jwt_expires_minutes: env_int64(&dotenv_map, "JWT_EXPIRES_MINUTES", DEFAULT_JWT_EXPIRES_MINUTES as i64),
+        jwt_expires_minutes: env_int64(
+            &dotenv_map,
+            "JWT_EXPIRES_MINUTES",
+            DEFAULT_JWT_EXPIRES_MINUTES as i64,
+        ),
         bcrypt_cost: env_int(&dotenv_map, "BCRYPT_COST", DEFAULT_BCRYPT_COST),
         message_recall_window_ms: env_int64(
             &dotenv_map,
@@ -439,13 +451,25 @@ pub fn load_config() -> Config {
             DEFAULT_MESSAGE_RECALL_WINDOW_MS,
         ),
         epoch_time: env_int64(&dotenv_map, "EPOCH_TIME", DEFAULT_EPOCH_TIME),
-        segment_duration_ms: env_int64(&dotenv_map, "ID_SEGMENT_DURATION_MS", DEFAULT_SEGMENT_DURATION_MS),
+        segment_duration_ms: env_int64(
+            &dotenv_map,
+            "ID_SEGMENT_DURATION_MS",
+            DEFAULT_SEGMENT_DURATION_MS,
+        ),
         segment_size: env_int64(&dotenv_map, "ID_SEGMENT_SIZE", DEFAULT_SEGMENT_SIZE),
-        message_retention_days: env_int(&dotenv_map, "MESSAGE_RETENTION_DAYS", DEFAULT_MESSAGE_RETENTION_DAYS),
+        message_retention_days: env_int(
+            &dotenv_map,
+            "MESSAGE_RETENTION_DAYS",
+            DEFAULT_MESSAGE_RETENTION_DAYS,
+        ),
         default_page_size: env_int(&dotenv_map, "DEFAULT_PAGE_SIZE", DEFAULT_PAGE_SIZE),
         max_page_size: env_int(&dotenv_map, "MAX_PAGE_SIZE", DEFAULT_MAX_PAGE_SIZE),
         public_id_length: env_int(&dotenv_map, "PUBLIC_ID_LENGTH", DEFAULT_PUBLIC_ID_LENGTH),
-        group_id_random_length: env_int(&dotenv_map, "GROUP_ID_RANDOM_LENGTH", DEFAULT_GROUP_ID_RANDOM_LENGTH),
+        group_id_random_length: env_int(
+            &dotenv_map,
+            "GROUP_ID_RANDOM_LENGTH",
+            DEFAULT_GROUP_ID_RANDOM_LENGTH,
+        ),
         worker_table_create_interval_hours: env_int64(
             &dotenv_map,
             "WORKER_TABLE_CREATE_INTERVAL_HOURS",

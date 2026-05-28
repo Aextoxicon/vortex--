@@ -145,7 +145,11 @@ impl RateLimiter {
         max_failures: i32,
     ) -> bool {
         let shard = self.get_shard(public_id);
-        let fail_count = shard.fail_counts.get(public_id).map(|e| *e.value()).unwrap_or(0);
+        let fail_count = shard
+            .fail_counts
+            .get(public_id)
+            .map(|e| *e.value())
+            .unwrap_or(0);
 
         if fail_count >= max_failures {
             let now = std::time::SystemTime::now()

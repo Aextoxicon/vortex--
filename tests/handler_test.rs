@@ -1,12 +1,12 @@
 mod test_utils;
 
-use axum::http::{header, StatusCode};
 use axum::Router;
+use axum::http::{StatusCode, header};
 use serde_json::json;
 use std::sync::Arc;
 use test_utils::{TestFixture, unique_username};
 use tower::util::ServiceExt;
-use vortex__::{account, config, idgen, jwt, ratelimit, shared, store, AppState};
+use vortex__::{AppState, account, config, idgen, jwt, ratelimit, shared, store};
 
 async fn setup_test_app() -> (TestFixture, Router, Arc<AppState>) {
     let fixture = TestFixture::new().await;
@@ -111,7 +111,9 @@ async fn test_register_success() {
                 .method("POST")
                 .uri("/api/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -136,7 +138,9 @@ async fn test_register_weak_password() {
                 .method("POST")
                 .uri("/api/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -161,7 +165,9 @@ async fn test_register_invalid_username() {
                 .method("POST")
                 .uri("/api/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -188,7 +194,9 @@ async fn test_register_duplicate() {
                 .method("POST")
                 .uri("/api/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -202,7 +210,9 @@ async fn test_register_duplicate() {
                 .method("POST")
                 .uri("/api/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -228,7 +238,9 @@ async fn test_login_success() {
                 .method("POST")
                 .uri("/api/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -245,7 +257,9 @@ async fn test_login_success() {
                 .method("POST")
                 .uri("/api/auth/login")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&login_body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&login_body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -271,7 +285,9 @@ async fn test_login_wrong_password() {
                 .method("POST")
                 .uri("/api/auth/register")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -288,7 +304,9 @@ async fn test_login_wrong_password() {
                 .method("POST")
                 .uri("/api/auth/login")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&login_body).unwrap()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&login_body).unwrap(),
+                ))
                 .unwrap(),
         )
         .await

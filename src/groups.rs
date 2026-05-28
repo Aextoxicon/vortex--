@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -57,11 +57,7 @@ impl Service {
             return Err(AppError::bad_request("Group name must be 1-50 characters"));
         }
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+        let mut tx = self.pool.begin().await?;
 
         let now = chrono::Utc::now().timestamp_millis();
         let group_id = self.generate_group_id();
@@ -100,22 +96,15 @@ impl Service {
         .bind("owner")
         .bind(now)
         .execute(&mut *tx)
-        .await
-        ?;
+        .await?;
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         Ok(group_id)
     }
 
     pub async fn get_group_by_id(&self, group_id: &str) -> Result<Group, AppError> {
-        let group = self
-            .group_store
-            .get_by_id(group_id)
-            .await
-            ?;
+        let group = self.group_store.get_by_id(group_id).await?;
         group.ok_or_else(|| AppError::not_found("group not found"))
     }
 
@@ -123,35 +112,24 @@ impl Service {
         let mut updated = group.clone();
         updated.updated_at = chrono::Utc::now().timestamp_millis();
 
-        self.group_store
-            .update(&updated)
-            .await
-            ?;
+        self.group_store.update(&updated).await?;
 
         Ok(())
     }
 
     pub async fn delete_group(&self, group_id: &str) -> Result<(), AppError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+        let mut tx = self.pool.begin().await?;
 
         self.group_mem_store
             .delete_by_group_tx(&mut tx, group_id)
-            .await
-            ?;
+            .await?;
 
         sqlx::query(r#"UPDATE groups SET is_deleted = 1 WHERE group_id = $1"#)
             .bind(group_id)
             .execute(&mut *tx)
-            .await
-            ?;
+            .await?;
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -173,11 +151,7 @@ impl Service {
             joined_at: now,
         };
 
-        let id = self
-            .group_mem_store
-            .insert(&member)
-            .await
-            ?;
+        let id = self.group_mem_store.insert(&member).await?;
 
         if id == 0 {
             return Err(AppError::new(StatusCode::CONFLICT, "Already a member"));
@@ -196,22 +170,13 @@ impl Service {
         Ok(())
     }
 
-    pub async fn remove_member(
-        &self,
-        group_id: &str,
-        user_id: i64,
-    ) -> Result<(), AppError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+    pub async fn remove_member(&self, group_id: &str, user_id: i64) -> Result<(), AppError> {
+        let mut tx = self.pool.begin().await?;
 
         let member = self
             .group_mem_store
             .get_tx(&mut tx, group_id, user_id)
-            .await
-            ?;
+            .await?;
 
         match member {
             None => return Err(AppError::new(StatusCode::NOT_FOUND, "Not a group member")),
@@ -221,12 +186,9 @@ impl Service {
 
         self.group_mem_store
             .delete_by_group_and_user_tx(&mut tx, group_id, user_id)
-            .await
-            ?;
+            .await?;
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -249,17 +211,12 @@ impl Service {
 
         let kicked_user = self.get_user_by_id(member_id).await?;
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            ?;
+        let mut tx = self.pool.begin().await?;
 
         let is_member = self
             .group_mem_store
             .is_member_tx(&mut tx, group_id, member_id)
-            .await
-            ?;
+            .await?;
 
         if !is_member {
             return Err(AppError::new(StatusCode::NOT_FOUND, "Not a group member"));
@@ -267,8 +224,7 @@ impl Service {
 
         self.group_mem_store
             .delete_by_group_and_user_tx(&mut tx, group_id, member_id)
-            .await
-            ?;
+            .await?;
 
         let conv_id = format!("g_{}", group_id);
         let system_msg = json!({
@@ -285,9 +241,7 @@ impl Service {
         self.send_system_message_tx(&mut tx, &conv_id, &content_bytes)
             .await?;
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         tracing::info!(
             group_id = group_id,
@@ -325,13 +279,15 @@ impl Service {
         .bind(ts)
         .bind(0i32)
         .execute(&mut **tx)
-        .await
-        ?;
+        .await?;
 
         Ok(msg_id)
     }
 
-    pub async fn get_group_members(&self, group_id: &str) -> Result<Vec<crate::store::GroupMember>, AppError> {
+    pub async fn get_group_members(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<crate::store::GroupMember>, AppError> {
         self.group_mem_store
             .get_members(group_id)
             .await
@@ -385,7 +341,10 @@ pub async fn create_group(
 ) -> Result<impl IntoResponse + use<>, AppError> {
     let req = req.0;
 
-    let group_id = state.svc.create_group(&req.name, &req.description, user_id).await?;
+    let group_id = state
+        .svc
+        .create_group(&req.name, &req.description, user_id)
+        .await?;
 
     Ok((
         StatusCode::CREATED,

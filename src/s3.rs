@@ -1,11 +1,11 @@
+use aws_config::BehaviorVersion;
+use aws_sdk_s3::Client;
+use aws_sdk_s3::config::Credentials;
+use aws_sdk_s3::presigning::PresigningConfig;
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
-use aws_config::BehaviorVersion;
-use aws_sdk_s3::config::Credentials;
-use aws_sdk_s3::presigning::PresigningConfig;
-use aws_sdk_s3::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -37,8 +37,7 @@ impl S3Service {
         secret_key: &str,
     ) -> Result<Self, String> {
         let region = aws_sdk_s3::config::Region::new(region.to_string());
-        let mut config_builder = aws_config::defaults(BehaviorVersion::latest())
-            .region(region);
+        let mut config_builder = aws_config::defaults(BehaviorVersion::latest()).region(region);
 
         if !endpoint.is_empty() {
             config_builder = config_builder.endpoint_url(endpoint);
@@ -83,10 +82,7 @@ impl S3Service {
         Ok((presigned.uri().to_string(), file_key))
     }
 
-    pub async fn generate_download_url(
-        &self,
-        file_key: &str,
-    ) -> Result<String, AppError> {
+    pub async fn generate_download_url(&self, file_key: &str) -> Result<String, AppError> {
         let presign_config = PresigningConfig::builder()
             .expires_in(Duration::from_secs(604800))
             .build()
@@ -142,10 +138,12 @@ impl Service {
         user_id: i64,
         req: PresignRequest,
     ) -> Result<impl IntoResponse + use<>, AppError> {
-        let s3_service = self
-            .s3_service
-            .as_ref()
-            .ok_or_else(|| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "S3 service not configured"))?;
+        let s3_service = self.s3_service.as_ref().ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "S3 service not configured",
+            )
+        })?;
 
         match req.operation.as_str() {
             "upload" => {
@@ -153,19 +151,11 @@ impl Service {
                     return Err(AppError::bad_request("conv_id and file_ext are required"));
                 }
 
-                let has_perm = self
-                    .conv_part_store
-                    .exists(&req.conv_id, user_id)
-                    .await
-                    ?;
+                let has_perm = self.conv_part_store.exists(&req.conv_id, user_id).await?;
 
                 if !has_perm {
                     if let Some(group_id) = crate::shared::extract_group_id(&req.conv_id) {
-                        let is_member = self
-                            .group_mem_store
-                            .is_member(&group_id, user_id)
-                            .await
-                            ?;
+                        let is_member = self.group_mem_store.is_member(&group_id, user_id).await?;
                         if !is_member {
                             return Err(AppError::forbidden());
                         }
@@ -193,19 +183,11 @@ impl Service {
                 let conv_id = extract_conv_id_from_key(&req.file_key)
                     .ok_or_else(|| AppError::bad_request("invalid file key format"))?;
 
-                let has_perm = self
-                    .conv_part_store
-                    .exists(&conv_id, user_id)
-                    .await
-                    ?;
+                let has_perm = self.conv_part_store.exists(&conv_id, user_id).await?;
 
                 if !has_perm {
                     if let Some(group_id) = crate::shared::extract_group_id(&conv_id) {
-                        let is_member = self
-                            .group_mem_store
-                            .is_member(&group_id, user_id)
-                            .await
-                            ?;
+                        let is_member = self.group_mem_store.is_member(&group_id, user_id).await?;
                         if !is_member {
                             return Err(AppError::forbidden());
                         }
@@ -214,9 +196,7 @@ impl Service {
                     }
                 }
 
-                let url = s3_service
-                    .generate_download_url(&req.file_key)
-                    .await?;
+                let url = s3_service.generate_download_url(&req.file_key).await?;
 
                 Ok(Json(PresignResponse {
                     url,

@@ -1,6 +1,6 @@
 use axum::extract::State;
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -65,7 +65,10 @@ impl JwtService {
                 self.blacklist_cache.write().unwrap().extend(cache);
             }
             Err(e) => {
-                tracing::warn!("failed to load blacklist from database, cache will be empty: {}", e);
+                tracing::warn!(
+                    "failed to load blacklist from database, cache will be empty: {}",
+                    e
+                );
             }
         }
     }
@@ -123,7 +126,9 @@ impl JwtService {
             {
                 let mut cache = self.blacklist_cache.write().unwrap();
                 for jti in &expired_items {
-                    if let Some(&exp) = cache.get(jti) && exp < now {
+                    if let Some(&exp) = cache.get(jti)
+                        && exp < now
+                    {
                         cache.remove(jti);
                     }
                 }
@@ -158,7 +163,12 @@ impl JwtService {
         });
     }
 
-    pub fn generate_token(&self, user_id: i64, public_id: &str, username: &str) -> Result<String, String> {
+    pub fn generate_token(
+        &self,
+        user_id: i64,
+        public_id: &str,
+        username: &str,
+    ) -> Result<String, String> {
         let now = Utc::now();
         let expires_at = now + Duration::minutes(self.expires_in_minutes);
         let jti = uuid::Uuid::new_v4().to_string();
@@ -212,6 +222,19 @@ pub async fn auth_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    let path = req.uri().path();
+
+    let public_paths = [
+        "/health",
+        "/ready",
+        "/metrics",
+        "/api/auth/register",
+        "/api/auth/login",
+    ];
+    if public_paths.iter().any(|p| path == *p) {
+        return next.run(req).await;
+    }
+
     let auth_header = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
@@ -235,19 +258,15 @@ pub async fn auth_middleware(
                     req.extensions_mut().insert(claims.public_id);
                     next.run(req).await
                 }
-                Err(_) => {
-                    axum::response::Response::builder()
-                        .status(axum::http::StatusCode::UNAUTHORIZED)
-                        .body(axum::body::Body::from("Invalid token"))
-                        .unwrap()
-                }
+                Err(_) => axum::response::Response::builder()
+                    .status(axum::http::StatusCode::UNAUTHORIZED)
+                    .body(axum::body::Body::from("Invalid token"))
+                    .unwrap(),
             }
         }
-        None => {
-            axum::response::Response::builder()
-                .status(axum::http::StatusCode::UNAUTHORIZED)
-                .body(axum::body::Body::from("Missing token"))
-                .unwrap()
-        }
+        None => axum::response::Response::builder()
+            .status(axum::http::StatusCode::UNAUTHORIZED)
+            .body(axum::body::Body::from("Missing token"))
+            .unwrap(),
     }
 }

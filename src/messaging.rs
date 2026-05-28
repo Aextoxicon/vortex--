@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -116,43 +116,47 @@ fn messages_to_response_items(
     users_map: &HashMap<i64, crate::store::User>,
     epoch_time: i64,
 ) -> Vec<MessageResponseItem> {
-    messages.iter().map(|m| {
-        let sender_id = users_map.get(&m.from_uid)
-            .map(|u| u.public_id.clone())
-            .unwrap_or_default();
+    messages
+        .iter()
+        .map(|m| {
+            let sender_id = users_map
+                .get(&m.from_uid)
+                .map(|u| u.public_id.clone())
+                .unwrap_or_default();
 
-        let ts_ms = epoch_time + m.ts;
-        let secs = ts_ms / 1000;
-        let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-        let created_at = chrono::DateTime::from_timestamp(secs, nsecs)
-            .map(|dt| dt.to_rfc3339())
-            .unwrap_or_default();
+            let ts_ms = epoch_time + m.ts;
+            let secs = ts_ms / 1000;
+            let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
+            let created_at = chrono::DateTime::from_timestamp(secs, nsecs)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default();
 
-        let content_type = if m.content.starts_with("{\"type\":\"image\"") {
-            "image".to_string()
-        } else {
-            "text".to_string()
-        };
+            let content_type = if m.content.starts_with("{\"type\":\"image\"") {
+                "image".to_string()
+            } else {
+                "text".to_string()
+            };
 
-        let content = if content_type == "image" {
-            if let Ok(img) = serde_json::from_str::<ImageContent>(&m.content) {
-                img.text.clone()
+            let content = if content_type == "image" {
+                if let Ok(img) = serde_json::from_str::<ImageContent>(&m.content) {
+                    img.text.clone()
+                } else {
+                    m.content.clone()
+                }
             } else {
                 m.content.clone()
-            }
-        } else {
-            m.content.clone()
-        };
+            };
 
-        MessageResponseItem {
-            id: format!("msg_{}", m.msg_id),
-            conv_id: m.conv_id.clone(),
-            sender_id,
-            content,
-            content_type,
-            created_at,
-        }
-    }).collect()
+            MessageResponseItem {
+                id: format!("msg_{}", m.msg_id),
+                conv_id: m.conv_id.clone(),
+                sender_id,
+                content,
+                content_type,
+                created_at,
+            }
+        })
+        .collect()
 }
 
 impl Service {
@@ -165,14 +169,14 @@ impl Service {
         client_msg_id: Option<&str>,
     ) -> Result<SendMessageResult, AppError> {
         if content.len() > 1000 {
-            return Err(AppError::bad_request("message content too long (max 1000 characters)"));
+            return Err(AppError::bad_request(
+                "message content too long (max 1000 characters)",
+            ));
         }
 
         if let Some(cmid) = client_msg_id {
-            let (is_dup, existing_msg_id) = self
-                .idempotency_store
-                .check_and_insert(uid, cmid)
-                .await?;
+            let (is_dup, existing_msg_id) =
+                self.idempotency_store.check_and_insert(uid, cmid).await?;
 
             if is_dup {
                 return Ok(SendMessageResult {
@@ -181,11 +185,16 @@ impl Service {
             }
         }
 
-        let result = self.send_message_inner(uid, public_id, conv_id, content, client_msg_id).await;
+        let result = self
+            .send_message_inner(uid, public_id, conv_id, content, client_msg_id)
+            .await;
 
         if result.is_err()
             && let Some(cmid) = client_msg_id
-            && let Err(e) = self.idempotency_store.update_msg_id(uid, cmid, 0, conv_id).await
+            && let Err(e) = self
+                .idempotency_store
+                .update_msg_id(uid, cmid, 0, conv_id)
+                .await
         {
             tracing::warn!("idempotency cleanup failed: {}", e);
         }
@@ -221,10 +230,7 @@ impl Service {
             is_recalled: 0,
         };
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await?;
+        let mut tx = self.pool.begin().await?;
 
         let target_user = if msg_type == "p" || msg_type == "user" {
             let target_public_id = crate::shared::get_other_public_id(conv_id, public_id);
@@ -236,18 +242,10 @@ impl Service {
             None
         };
 
-        self.ensure_session_permission_tx(
-            &mut tx,
-            uid,
-            conv_id,
-            msg_type,
-            target_user.as_ref(),
-        )
-        .await?;
-
-        self.msg_store
-            .insert_message_tx(&mut tx, &msg)
+        self.ensure_session_permission_tx(&mut tx, uid, conv_id, msg_type, target_user.as_ref())
             .await?;
+
+        self.msg_store.insert_message_tx(&mut tx, &msg).await?;
 
         if let Some(cmid) = client_msg_id {
             self.idempotency_store
@@ -261,18 +259,11 @@ impl Service {
     }
 
     async fn ensure_conv_access(&self, conv_id: &str, user_id: i64) -> Result<(), AppError> {
-        let has_perm = self
-            .conv_part_store
-            .exists(conv_id, user_id)
-            .await
-            ?;
+        let has_perm = self.conv_part_store.exists(conv_id, user_id).await?;
 
         if !has_perm {
             if let Some(group_id) = crate::shared::extract_group_id(conv_id) {
-                let is_member = self
-                    .is_user_in_group(&group_id, user_id)
-                    .await
-                    ?;
+                let is_member = self.is_user_in_group(&group_id, user_id).await?;
                 if !is_member {
                     return Err(AppError::forbidden());
                 }
@@ -297,8 +288,7 @@ impl Service {
         let messages = self
             .msg_store
             .get_conversation_messages(conv_id, query_limit, offset as i64)
-            .await
-            ?;
+            .await?;
 
         let has_more = messages.len() > limit;
         let messages = if has_more {
@@ -309,7 +299,11 @@ impl Service {
 
         let max_msg_id = messages.last().map(|m| m.msg_id).unwrap_or(0);
 
-        Ok(MessagePage { messages, has_more, max_msg_id })
+        Ok(MessagePage {
+            messages,
+            has_more,
+            max_msg_id,
+        })
     }
 
     pub async fn get_conversation_messages_after(
@@ -335,14 +329,9 @@ impl Service {
         let updated = self
             .msg_store
             .get_updated_conversations(user_id, last_msg_id)
-            .await
-            ?;
+            .await?;
 
-        let has_pending = self
-            .friend_store
-            .has_pending_requests(user_id)
-            .await
-            ?;
+        let has_pending = self.friend_store.has_pending_requests(user_id).await?;
 
         let mut status = 0;
         if !updated.is_empty() {
@@ -355,16 +344,8 @@ impl Service {
         Ok((status, updated))
     }
 
-    pub async fn recall_message(
-        &self,
-        msg_id: i64,
-        user_id: i64,
-    ) -> Result<(), AppError> {
-        let msg = self
-            .msg_store
-            .get_message(msg_id)
-            .await
-            ?;
+    pub async fn recall_message(&self, msg_id: i64, user_id: i64) -> Result<(), AppError> {
+        let msg = self.msg_store.get_message(msg_id).await?;
 
         let msg = msg.ok_or_else(|| AppError::not_found("message not found"))?;
 
@@ -386,10 +367,7 @@ impl Service {
         updated_msg.is_recalled = 1;
         updated_msg.content = String::new();
 
-        self.msg_store
-            .update_message(&updated_msg)
-            .await
-            ?;
+        self.msg_store.update_message(&updated_msg).await?;
 
         if self.s3_service.is_some() {
             let file_key = extract_file_key_from_message(&msg);
@@ -416,10 +394,7 @@ impl Service {
             is_recalled: 1,
         };
 
-        self.msg_store
-            .insert_message(&recall_msg)
-            .await
-            ?;
+        self.msg_store.insert_message(&recall_msg).await?;
 
         Ok(())
     }
@@ -439,34 +414,23 @@ impl Service {
                     return Err(AppError::forbidden());
                 }
 
-                let any_blocked = self
-                    .conv_part_store
-                    .is_any_blocked(conv_id)
-                    .await
-                    ?;
+                let any_blocked = self.conv_part_store.is_any_blocked(conv_id).await?;
                 if any_blocked {
                     return Err(AppError::forbidden());
                 }
 
                 if let Some(target) = target_user {
-                    let are_friends = self
-                        .friend_store
-                        .are_friends(uid, target.id)
-                        .await
-                        ?;
+                    let are_friends = self.friend_store.are_friends(uid, target.id).await?;
                     if !are_friends {
                         return Err(AppError::new(StatusCode::FORBIDDEN, "not friends"));
                     }
                 }
 
-                let has_perm = self
-                    .conv_part_store
-                    .exists_tx(tx, conv_id, uid)
-                    .await
-                    ?;
+                let has_perm = self.conv_part_store.exists_tx(tx, conv_id, uid).await?;
 
                 if !has_perm {
-                    let target_user = target_user.ok_or_else(|| AppError::bad_request("invalid target ID"))?;
+                    let target_user =
+                        target_user.ok_or_else(|| AppError::bad_request("invalid target ID"))?;
                     let now = Utc::now().timestamp_millis();
                     let participants = vec![
                         ConversationParticipant {
@@ -484,18 +448,14 @@ impl Service {
                     ];
                     self.conv_part_store
                         .insert_batch_tx(tx, &participants)
-                        .await
-                        ?;
+                        .await?;
                 }
                 Ok(())
             }
             "g" | "group" => {
                 let group_id = crate::shared::extract_group_id(conv_id)
                     .ok_or_else(|| AppError::bad_request("invalid group ID"))?;
-                let is_member = self
-                    .is_user_in_group(&group_id, uid)
-                    .await
-                    ?;
+                let is_member = self.is_user_in_group(&group_id, uid).await?;
                 if !is_member {
                     return Err(AppError::new(StatusCode::FORBIDDEN, "not a group member"));
                 }
@@ -514,12 +474,13 @@ impl Service {
         let items = self
             .conv_part_store
             .get_conversation_list(user_id, limit as i64, offset as i64)
-            .await
-            ?;
+            .await?;
 
         let mut user_ids = Vec::new();
         for item in &items {
-            if item.r#type == "private" && let Some(target_uid) = item.target_uid {
+            if item.r#type == "private"
+                && let Some(target_uid) = item.target_uid
+            {
                 user_ids.push(target_uid);
             }
         }
@@ -540,13 +501,16 @@ impl Service {
                 unread_count: 0,
             };
 
-            if item.r#type == "private" && let Some(target_uid) = item.target_uid
+            if item.r#type == "private"
+                && let Some(target_uid) = item.target_uid
                 && let Some(target_user) = users_map.get(&target_uid)
             {
                 conv.name = target_user.username.clone();
                 conv.public_id = Some(target_user.public_id.clone());
                 conv.username = Some(target_user.username.clone());
-            } else if item.r#type == "group" && let Some(ref group_id) = item.group_id {
+            } else if item.r#type == "group"
+                && let Some(ref group_id) = item.group_id
+            {
                 conv.group_id = Some(group_id.clone());
                 if let Ok(Some(g)) = self.group_store.get_by_id(group_id).await {
                     conv.name = g.name.clone();
@@ -556,9 +520,13 @@ impl Service {
                 }
             }
 
-            if let (Some(msg_id), Some(from_uid), Some(content), Some(ts), Some(is_recalled)) =
-                (item.last_msg_id, item.from_uid, &item.content, item.last_msg_ts, item.is_recalled)
-            {
+            if let (Some(msg_id), Some(from_uid), Some(content), Some(ts), Some(is_recalled)) = (
+                item.last_msg_id,
+                item.from_uid,
+                &item.content,
+                item.last_msg_ts,
+                item.is_recalled,
+            ) {
                 conv.last_message = Some(LastMessageInfo {
                     msg_id,
                     content: content.clone(),
@@ -577,13 +545,17 @@ impl Service {
             .await
             .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-        Ok(ConversationListResponse { conversations, total: total as usize })
+        Ok(ConversationListResponse {
+            conversations,
+            total: total as usize,
+        })
     }
 }
 
 fn extract_file_key_from_message(msg: &Message) -> String {
     if let Ok(img) = serde_json::from_str::<ImageContent>(&msg.content)
-        && img.type_field == "image" && !img.content.is_empty()
+        && img.type_field == "image"
+        && !img.content.is_empty()
     {
         if let Ok(url) = url::Url::parse(&img.content) {
             return url.path().trim_start_matches('/').to_string();
@@ -601,7 +573,10 @@ pub async fn send_message(
 ) -> Result<impl IntoResponse + use<>, AppError> {
     let req = req.0;
 
-    let content_type = req.content_type.clone().unwrap_or_else(|| "text".to_string());
+    let content_type = req
+        .content_type
+        .clone()
+        .unwrap_or_else(|| "text".to_string());
 
     let mut content = req.content.clone();
     if content_type == "image" {
@@ -616,7 +591,13 @@ pub async fn send_message(
 
     let result = state
         .svc
-        .send_message(user_id, &public_id, &req.conv_id, &content, req.client_msg_id.as_deref())
+        .send_message(
+            user_id,
+            &public_id,
+            &req.conv_id,
+            &content,
+            req.client_msg_id.as_deref(),
+        )
         .await?;
 
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -644,7 +625,9 @@ pub async fn get_messages(
     let q = query.0;
 
     let page_size = if let Some(v) = &q.page_size {
-        let n = v.parse::<usize>().map_err(|_| AppError::bad_request("invalid pageSize"))?;
+        let n = v
+            .parse::<usize>()
+            .map_err(|_| AppError::bad_request("invalid pageSize"))?;
         if n > state.svc.cfg.max_page_size as usize {
             state.svc.cfg.max_page_size as usize
         } else if n < 1 {
@@ -665,7 +648,9 @@ pub async fn get_messages(
             .await?
     } else {
         let page = if let Some(v) = &q.page {
-            let n = v.parse::<usize>().map_err(|_| AppError::bad_request("invalid page"))?;
+            let n = v
+                .parse::<usize>()
+                .map_err(|_| AppError::bad_request("invalid page"))?;
             if n < 1 { 1 } else { n }
         } else {
             1
@@ -679,9 +664,16 @@ pub async fn get_messages(
             .await?
     };
 
-    let users_map = state.svc.get_users_by_ids(
-        &result.messages.iter().map(|m| m.from_uid).collect::<Vec<_>>()
-    ).await?;
+    let users_map = state
+        .svc
+        .get_users_by_ids(
+            &result
+                .messages
+                .iter()
+                .map(|m| m.from_uid)
+                .collect::<Vec<_>>(),
+        )
+        .await?;
 
     let epoch_time = state.svc.id_gen.get_epoch_time();
     let messages = messages_to_response_items(&result.messages, &users_map, epoch_time);
@@ -704,7 +696,9 @@ pub async fn recall_message(
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse + use<>, AppError> {
-    let msg_id: i64 = msg_id.parse().map_err(|_| AppError::bad_request("invalid message ID"))?;
+    let msg_id: i64 = msg_id
+        .parse()
+        .map_err(|_| AppError::bad_request("invalid message ID"))?;
     state.svc.recall_message(msg_id, user_id).await?;
 
     Ok(Json(json!({
