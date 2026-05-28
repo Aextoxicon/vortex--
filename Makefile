@@ -1,4 +1,4 @@
-.PHONY: test-unit test-integration test-all clean build fmt
+.PHONY: test-unit test-integration test-all clean build build-linux build-linux-musl fmt
 
 # 运行所有单元测试（无需 Docker）
 test-unit:
@@ -16,9 +16,17 @@ test-integration:
 test-all: test-unit test-integration
 	@echo "All tests completed"
 
-# 构建
+# 构建（本地平台）
 build:
 	cargo build --release
+
+# 交叉编译 Linux x86_64 (glibc)
+build-linux:
+	cargo zigbuild --release --target x86_64-unknown-linux-gnu
+
+# 交叉编译 Linux x86_64 (musl, 静态链接)
+build-linux-musl:
+	cargo zigbuild --release --target x86_64-unknown-linux-musl
 
 # 格式化代码
 fmt:
