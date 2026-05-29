@@ -225,9 +225,6 @@ pub async fn auth_middleware(
     let path = req.uri().path();
 
     let public_paths = [
-        "/health",
-        "/ready",
-        "/metrics",
         "/api/auth/register",
         "/api/auth/login",
     ];
