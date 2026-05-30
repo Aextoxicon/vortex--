@@ -177,6 +177,8 @@ impl Service {
 
         self.update_user(&user).await?;
 
+        self.user_cache.invalidate(&user.id);
+
         Ok(user)
     }
 
@@ -190,6 +192,7 @@ impl Service {
         }
 
         let user = self.get_user_by_public_id(target_public_id).await?;
+        self.user_cache.invalidate(&user.id);
         self.delete_user(user.id).await
     }
 

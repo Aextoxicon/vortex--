@@ -53,6 +53,12 @@ async fn setup_test_service() -> (TestFixture, shared::Service) {
     );
     id_gen.init().await;
 
+    let user_cache = shared::UserCache::builder()
+        .max_capacity(5000)
+        .time_to_live(std::time::Duration::from_secs(300))
+        .time_to_idle(std::time::Duration::from_secs(60))
+        .build();
+
     let svc = shared::Service::new(
         cfg.clone(),
         fixture.pool.clone(),
@@ -65,6 +71,7 @@ async fn setup_test_service() -> (TestFixture, shared::Service) {
         idempotency_store,
         id_gen,
         None,
+        user_cache,
     );
 
     (fixture, svc)
@@ -156,8 +163,8 @@ async fn test_validate_credentials() {
         .await
         .unwrap();
 
-    assert!(svc.validate_credentials(&user, &password).is_ok());
-    assert!(svc.validate_credentials(&user, "wrongpassword").is_err());
+    assert!(svc.validate_credentials(&user, &password).await.is_ok());
+    assert!(svc.validate_credentials(&user, "wrongpassword").await.is_err());
 }
 
 #[tokio::test]

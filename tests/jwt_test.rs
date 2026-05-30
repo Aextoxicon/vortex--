@@ -11,7 +11,8 @@ async fn setup_jwt_service() -> (TestFixture, jwt::JwtService) {
         "test-secret-key-min-32-chars-long!!",
         "test-issuer",
         60,
-    );
+    )
+    .await;
 
     (fixture, jwt_service)
 }
@@ -76,7 +77,8 @@ async fn test_token_expiration() {
         "test-secret-key-min-32-chars-long!!",
         "test-issuer",
         -60,
-    );
+    )
+    .await;
 
     let user_id = 1;
     let public_id = "test_public_id";

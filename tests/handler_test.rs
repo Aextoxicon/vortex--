@@ -59,6 +59,12 @@ async fn setup_test_app() -> (TestFixture, Router, Arc<AppState>) {
     );
     id_gen.init().await;
 
+    let user_cache = shared::UserCache::builder()
+        .max_capacity(5000)
+        .time_to_live(std::time::Duration::from_secs(300))
+        .time_to_idle(std::time::Duration::from_secs(60))
+        .build();
+
     let svc = shared::Service::new(
         cfg.clone(),
         fixture.pool.clone(),
@@ -71,6 +77,7 @@ async fn setup_test_app() -> (TestFixture, Router, Arc<AppState>) {
         idempotency_store,
         id_gen,
         None,
+        user_cache,
     );
 
     let jwt_service = jwt::JwtService::new(
@@ -78,7 +85,8 @@ async fn setup_test_app() -> (TestFixture, Router, Arc<AppState>) {
         &cfg.jwt_secret,
         &cfg.jwt_issuer,
         cfg.jwt_expires_minutes,
-    );
+    )
+    .await;
 
     let app_state = Arc::new(AppState {
         svc,

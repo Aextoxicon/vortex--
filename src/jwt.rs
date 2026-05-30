@@ -228,7 +228,7 @@ pub async fn auth_middleware(
         "/api/auth/register",
         "/api/auth/login",
     ];
-    if public_paths.iter().any(|p| path == *p) {
+    if public_paths.contains(&path) {
         return next.run(req).await;
     }
 

@@ -92,6 +92,12 @@ async fn main() {
         None
     };
 
+    let user_cache = shared::UserCache::builder()
+        .max_capacity(5000)
+        .time_to_live(std::time::Duration::from_secs(300))
+        .time_to_idle(std::time::Duration::from_secs(60))
+        .build();
+
     let svc = shared::Service::new(
         cfg.clone(),
         pool.clone(),
@@ -104,6 +110,7 @@ async fn main() {
         idempotency_store.clone(),
         id_gen,
         s3_service,
+        user_cache,
     );
 
     let jwt_service = jwt::JwtService::new(
@@ -214,6 +221,8 @@ fn init_logging() {
 async fn init_db(cfg: &Config) -> Result<sqlx::PgPool, String> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(cfg.db_max_open_conns as u32)
+        .idle_timeout(Duration::from_secs(600)) // 空闲连接 10 分钟回收
+        .max_lifetime(Duration::from_secs(3600)) // 连接最大生命周期 1 小时
         .connect(&cfg.database_url)
         .await
         .map_err(|e| format!("failed to connect to database: {}", e))?;
@@ -291,12 +300,13 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
         )
         .route("/files/presign", axum::routing::post(s3::presign));
 
-    let api_routes = public_routes
-        .merge(protected_routes)
-        .layer(axum::middleware::from_fn_with_state(
-            (*app_state).clone(),
-            jwt::auth_middleware,
-        ));
+    let api_routes =
+        public_routes
+            .merge(protected_routes)
+            .layer(axum::middleware::from_fn_with_state(
+                (*app_state).clone(),
+                jwt::auth_middleware,
+            ));
 
     let app = Router::new()
         .route("/health", axum::routing::get(shared::health_check))

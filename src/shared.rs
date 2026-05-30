@@ -14,8 +14,10 @@ use crate::idgen::IdGenerator;
 use crate::s3::S3Service;
 use crate::store::{
     ConversationParticipantStore, FriendRequestStore, GroupMemberStore, GroupStore, Message,
-    MessageIdempotencyStore, MessageStore, UserStore,
+    MessageIdempotencyStore, MessageStore, User, UserStore,
 };
+
+pub type UserCache = moka::sync::Cache<i64, User>;
 
 #[derive(Clone)]
 pub struct Service {
@@ -30,6 +32,7 @@ pub struct Service {
     pub(crate) idempotency_store: MessageIdempotencyStore,
     pub(crate) id_gen: IdGenerator,
     pub(crate) s3_service: Option<S3Service>,
+    pub(crate) user_cache: UserCache,
 }
 
 impl Service {
@@ -46,6 +49,7 @@ impl Service {
         idempotency_store: MessageIdempotencyStore,
         id_gen: IdGenerator,
         s3_service: Option<S3Service>,
+        user_cache: UserCache,
     ) -> Self {
         Self {
             cfg,
@@ -59,6 +63,7 @@ impl Service {
             idempotency_store,
             id_gen,
             s3_service,
+            user_cache,
         }
     }
 
@@ -162,27 +167,31 @@ impl Service {
             .map_err(|e| {
                 crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
             })?;
-        user.ok_or_else(|| crate::error::AppError::not_found("user not found"))
+        let user = user.ok_or_else(|| crate::error::AppError::not_found("user not found"))?;
+        self.user_cache.insert(user.id, user.clone());
+        Ok(user)
     }
 
     pub async fn get_user_by_id(
         &self,
         user_id: i64,
     ) -> Result<crate::store::User, crate::error::AppError> {
+        if let Some(user) = self.user_cache.get(&user_id) {
+            return Ok(user);
+        }
         let user = self.user_store.get_by_id(user_id).await.map_err(|e| {
             crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
         })?;
-        user.ok_or_else(|| crate::error::AppError::not_found("user not found"))
+        let user = user.ok_or_else(|| crate::error::AppError::not_found("user not found"))?;
+        self.user_cache.insert(user_id, user.clone());
+        Ok(user)
     }
 
     pub async fn get_public_id_by_user_id(
         &self,
         user_id: i64,
     ) -> Result<String, crate::error::AppError> {
-        let user = self.user_store.get_by_id(user_id).await.map_err(|e| {
-            crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
-        })?;
-        let user = user.ok_or_else(|| crate::error::AppError::not_found("user not found"))?;
+        let user = self.get_user_by_id(user_id).await?;
         Ok(user.public_id)
     }
 
@@ -190,9 +199,32 @@ impl Service {
         &self,
         ids: &[i64],
     ) -> Result<std::collections::HashMap<i64, crate::store::User>, crate::error::AppError> {
-        self.user_store.get_by_ids(ids).await.map_err(|e| {
-            crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
-        })
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let mut result = std::collections::HashMap::new();
+        let mut missed = Vec::new();
+
+        for &id in ids {
+            if let Some(user) = self.user_cache.get(&id) {
+                result.insert(id, user);
+            } else {
+                missed.push(id);
+            }
+        }
+
+        if !missed.is_empty() {
+            let fetched = self.user_store.get_by_ids(&missed).await.map_err(|e| {
+                crate::error::AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            })?;
+            for (id, user) in &fetched {
+                self.user_cache.insert(*id, user.clone());
+            }
+            result.extend(fetched);
+        }
+
+        Ok(result)
     }
 
     pub async fn is_user_in_group(
