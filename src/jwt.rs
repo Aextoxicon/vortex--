@@ -55,7 +55,7 @@ impl JwtService {
 
         match result {
             Ok(rows) => {
-                let now = Utc::now().timestamp_millis();
+                let now = Utc::now().timestamp();
                 let mut cache = HashMap::new();
                 for (jti, expires_at) in rows {
                     if expires_at > now {
@@ -86,7 +86,7 @@ impl JwtService {
 
         let mut cache = self.blacklist_cache.write().unwrap();
         if cache.len() >= MAX_BLACKLIST_CACHE_SIZE {
-            let now = Utc::now().timestamp_millis();
+            let now = Utc::now().timestamp();
             cache.retain(|_, v| *v > now);
         }
         cache.insert(jti.to_string(), expires_at);
@@ -94,7 +94,7 @@ impl JwtService {
     }
 
     pub fn is_blacklisted(&self, jti: &str) -> bool {
-        let now = Utc::now().timestamp_millis();
+        let now = Utc::now().timestamp();
 
         let mut cache = self.blacklist_cache.write().unwrap();
         if let Some(&exp) = cache.get(jti) {
@@ -110,7 +110,7 @@ impl JwtService {
     }
 
     pub async fn cleanup_blacklist(&self) {
-        let now = Utc::now().timestamp_millis();
+        let now = Utc::now().timestamp();
 
         let expired_items: Vec<String> = {
             let cache = self.blacklist_cache.read().unwrap();
