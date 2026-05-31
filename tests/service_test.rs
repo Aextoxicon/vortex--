@@ -515,7 +515,23 @@ async fn test_conversation_count() {
         .unwrap();
 
     let conv_id = crate::shared::private_conv_id(&user1.public_id, &user2.public_id);
-    svc.create_conversation(&conv_id, user1.id, user2.id)
+    let now = chrono::Utc::now().timestamp_millis();
+    svc.conv_part_store
+        .insert(&store::ConversationParticipant {
+            conv_id: conv_id.clone(),
+            user_id: user1.id,
+            is_blocked: 0,
+            join_ts: now,
+        })
+        .await
+        .unwrap();
+    svc.conv_part_store
+        .insert(&store::ConversationParticipant {
+            conv_id: conv_id.clone(),
+            user_id: user2.id,
+            is_blocked: 0,
+            join_ts: now,
+        })
         .await
         .unwrap();
 
@@ -552,7 +568,23 @@ async fn test_conversation_is_blocked() {
         .unwrap();
 
     let conv_id = crate::shared::private_conv_id(&user1.public_id, &user2.public_id);
-    svc.create_conversation(&conv_id, user1.id, user2.id)
+    let now = chrono::Utc::now().timestamp_millis();
+    svc.conv_part_store
+        .insert(&store::ConversationParticipant {
+            conv_id: conv_id.clone(),
+            user_id: user1.id,
+            is_blocked: 0,
+            join_ts: now,
+        })
+        .await
+        .unwrap();
+    svc.conv_part_store
+        .insert(&store::ConversationParticipant {
+            conv_id: conv_id.clone(),
+            user_id: user2.id,
+            is_blocked: 0,
+            join_ts: now,
+        })
         .await
         .unwrap();
 
@@ -563,7 +595,10 @@ async fn test_conversation_is_blocked() {
         .unwrap();
     assert!(!blocked_before);
 
-    svc.block_user(&conv_id, user2.id).await.unwrap();
+    svc.conv_part_store
+        .set_blocked(&conv_id, user2.id, true)
+        .await
+        .unwrap();
 
     let blocked_after = svc
         .conv_part_store
