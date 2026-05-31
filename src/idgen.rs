@@ -1,5 +1,5 @@
 use sqlx::PgPool;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
@@ -54,6 +54,7 @@ pub struct IdGenerator {
     id_gen_state_store: crate::store::IdGeneratorStateStore,
     message_store: crate::store::MessageStore,
     init_done: Arc<tokio::sync::Notify>,
+    init_completed: Arc<AtomicBool>,
 }
 
 impl Clone for IdGenerator {
@@ -67,6 +68,7 @@ impl Clone for IdGenerator {
             id_gen_state_store: self.id_gen_state_store.clone(),
             message_store: self.message_store.clone(),
             init_done: self.init_done.clone(),
+            init_completed: self.init_completed.clone(),
         }
     }
 }
@@ -88,6 +90,7 @@ impl IdGenerator {
             id_gen_state_store,
             message_store,
             init_done: Arc::new(tokio::sync::Notify::new()),
+            init_completed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -99,6 +102,7 @@ impl IdGenerator {
         let id_gen_state_store = self.id_gen_state_store.clone();
         let message_store = self.message_store.clone();
         let init_done = self.init_done.clone();
+        let init_completed = self.init_completed.clone();
         let cfg_epoch_time = epoch_time.load(Ordering::Relaxed);
 
         let result = async {
@@ -158,11 +162,19 @@ impl IdGenerator {
             std::process::exit(1);
         }
 
+        init_completed.store(true, Ordering::Release);
         init_done.notify_waiters();
     }
 
     pub async fn wait_init(&self) {
-        self.init_done.notified().await;
+        if self.init_completed.load(Ordering::Acquire) {
+            return;
+        }
+        let notified = self.init_done.notified();
+        if self.init_completed.load(Ordering::Acquire) {
+            return;
+        }
+        notified.await;
     }
 
     pub async fn generate_id(&self) -> Result<i64, String> {
@@ -213,7 +225,7 @@ impl IdGenerator {
     fn try_prefetch(&self, current: &IdSegment) {
         let should_prefetch = {
             let segments = self.segments.lock().expect("segments mutex poisoned");
-            current.remaining() > 32768 || segments.len() >= 2
+            current.remaining() < 32768 && segments.len() < 2
         };
 
         if !should_prefetch {
