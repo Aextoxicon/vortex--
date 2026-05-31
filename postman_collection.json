@@ -320,6 +320,74 @@
               "path": ["api", "messages", "recall", "msg_test123"]
             }
           }
+        },
+        {
+          "name": "Get Message Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/messages/msg_test123",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "messages", "msg_test123"]
+            }
+          }
+        },
+        {
+          "name": "Get Conversation Count",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/count",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "conversations", "count"]
+            }
+          }
+        },
+        {
+          "name": "Get Conversation Participants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/conv_test123/participants",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "conversations", "conv_test123", "participants"]
+            }
+          }
+        },
+        {
+          "name": "Check Blocked Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/conv_test123/blocked/123",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "conversations", "conv_test123", "blocked", "123"]
+            }
+          }
         }
       ]
     },
@@ -357,6 +425,23 @@
               "raw": "{{baseUrl}}/api/friends/requests",
               "host": ["{{baseUrl}}"],
               "path": ["api", "friends", "requests"]
+            }
+          }
+        },
+        {
+          "name": "Get Pending Friend Requests",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/friends/requests/pending",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "friends", "requests", "pending"]
             }
           }
         },
@@ -565,6 +650,23 @@
               "raw": "{{baseUrl}}/api/groups/grp_test123/members/memberPublicId123",
               "host": ["{{baseUrl}}"],
               "path": ["api", "groups", "grp_test123", "members", "memberPublicId123"]
+            }
+          }
+        },
+        {
+          "name": "Get Group Member Count",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/groups/grp_test123/members/count",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "groups", "grp_test123", "members", "count"]
             }
           }
         },

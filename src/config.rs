@@ -12,8 +12,6 @@ const DEFAULT_JWT_EXPIRES_MINUTES: i32 = 10080;
 const DEFAULT_BCRYPT_COST: i32 = 10;
 const DEFAULT_MESSAGE_RECALL_WINDOW_MS: i64 = 120_000;
 const DEFAULT_EPOCH_TIME: i64 = 1_767_225_600_000;
-const DEFAULT_SEGMENT_DURATION_MS: i64 = 10_000;
-const DEFAULT_SEGMENT_SIZE: i64 = 1 << 17;
 const DEFAULT_MESSAGE_RETENTION_DAYS: i32 = 7;
 const DEFAULT_PAGE_SIZE: i32 = 100;
 const DEFAULT_MAX_PAGE_SIZE: i32 = 500;
@@ -41,8 +39,6 @@ pub struct Config {
     pub bcrypt_cost: i32,
     pub message_recall_window_ms: i64,
     pub epoch_time: i64,
-    pub segment_duration_ms: i64,
-    pub segment_size: i64,
     pub message_retention_days: i32,
     pub default_page_size: i32,
     pub max_page_size: i32,
@@ -367,12 +363,6 @@ impl Config {
         if self.database_url.is_empty() {
             return Err("DATABASE_URL is required".to_string());
         }
-        if self.segment_duration_ms <= 0 {
-            return Err("SEGMENT_DURATION_MS must be positive".to_string());
-        }
-        if self.segment_size <= 0 {
-            return Err("SEGMENT_SIZE must be positive".to_string());
-        }
         if self.message_retention_days <= 0 {
             return Err("MESSAGE_RETENTION_DAYS must be positive".to_string());
         }
@@ -451,12 +441,6 @@ pub fn load_config() -> Config {
             DEFAULT_MESSAGE_RECALL_WINDOW_MS,
         ),
         epoch_time: env_int64(&dotenv_map, "EPOCH_TIME", DEFAULT_EPOCH_TIME),
-        segment_duration_ms: env_int64(
-            &dotenv_map,
-            "ID_SEGMENT_DURATION_MS",
-            DEFAULT_SEGMENT_DURATION_MS,
-        ),
-        segment_size: env_int64(&dotenv_map, "ID_SEGMENT_SIZE", DEFAULT_SEGMENT_SIZE),
         message_retention_days: env_int(
             &dotenv_map,
             "MESSAGE_RETENTION_DAYS",

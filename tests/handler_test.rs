@@ -23,8 +23,6 @@ async fn setup_test_app() -> (TestFixture, Router, Arc<AppState>) {
         bcrypt_cost: 4,
         message_recall_window_ms: 120_000,
         epoch_time: 1700000000000,
-        segment_duration_ms: 3600000,
-        segment_size: 1000,
         message_retention_days: 7,
         default_page_size: 20,
         max_page_size: 100,

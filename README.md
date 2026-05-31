@@ -108,9 +108,13 @@ make test-all
 |------|------|------|------|
 | POST | `/api/messages/send` | 是 | 发送消息 |
 | GET | `/api/messages` | 是 | 获取消息列表 |
+| GET | `/api/messages/:msgId` | 是 | 获取消息详情 |
 | POST | `/api/messages/recall/:msgId` | 是 | 撤回消息 |
 | GET | `/api/check` | 是 | 检查新消息 |
 | GET | `/api/conversations` | 是 | 获取会话列表 |
+| GET | `/api/conversations/count` | 是 | 获取用户会话数 |
+| GET | `/api/conversations/:convId/participants` | 是 | 获取会话参与者 |
+| GET | `/api/conversations/:convId/blocked/:userId` | 是 | 检查屏蔽状态 |
 
 # 好友 (Friends)
 
@@ -118,6 +122,7 @@ make test-all
 |------|------|------|------|
 | POST | `/api/friends/request/send/:targetPublicId` | 是 | 发送好友请求 |
 | GET | `/api/friends/requests` | 是 | 获取好友请求 |
+| GET | `/api/friends/requests/pending` | 是 | 获取待处理好友请求 |
 | POST | `/api/friends/request/:requestId/accept` | 是 | 接受请求 |
 | POST | `/api/friends/request/:requestId/reject` | 是 | 拒绝请求 |
 | DELETE | `/api/friends/request/:requestId` | 是 | 取消请求 |
@@ -135,6 +140,7 @@ make test-all
 | POST | `/api/groups/:id/join` | 是 | 加入群组 |
 | POST | `/api/groups/:id/leave` | 是 | 退出群组 |
 | DELETE | `/api/groups/:id/members/:memberPublicId` | 是 | 踢出成员 |
+| GET | `/api/groups/:id/members/count` | 是 | 获取群组成员数 |
 
 # 文件 (Files)
 

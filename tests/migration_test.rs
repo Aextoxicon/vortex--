@@ -53,7 +53,6 @@ async fn test_migrations_create_indexes() {
         ),
         ("message_idempotency", "idx_message_idempotency_user_id"),
         ("message_idempotency", "idx_message_idempotency_created_at"),
-        ("messages", "idx_messages_conv_ts"),
         ("jwt_blacklist", "idx_jwt_blacklist_expires_at"),
     ];
 

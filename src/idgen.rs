@@ -13,6 +13,7 @@ const VF_MAX_SEQUENCE: i64 = (1 << VF_SEQUENCE_BITS) - 1;
 
 const VF_NODE_ID_SHIFT: i64 = VF_SEQUENCE_BITS;
 const VF_TIMESTAMP_SHIFT: i64 = VF_SEQUENCE_BITS + VF_NODE_ID_BITS;
+const SEGMENT_DURATION_MS: i64 = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct IdSegment {
@@ -131,7 +132,7 @@ impl IdGenerator {
 
                 let init_state = crate::store::IdGeneratorState {
                     id: 0,
-                    last_ts: start_ts + 10_000,
+                    last_ts: start_ts + SEGMENT_DURATION_MS,
                     epoch_time: cfg_epoch_time,
                 };
 
@@ -275,7 +276,7 @@ impl IdGenerator {
                 .as_millis() as i64
         };
 
-        let end_ts = start_ts + 10_000;
+        let end_ts = start_ts + SEGMENT_DURATION_MS;
 
         let start_id = (start_ts << VF_TIMESTAMP_SHIFT) | (node_id << VF_NODE_ID_SHIFT);
         let end_id =

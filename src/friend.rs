@@ -336,3 +336,33 @@ pub async fn unblock_user(
     state.svc.unblock_user(&conv_id, target_user.id).await?;
     Ok(Json(json!({ "message": "User unblocked successfully" })))
 }
+
+#[derive(Debug, Serialize)]
+pub struct GetPendingRequestsResponse {
+    pub requests: Vec<FriendRequestResponse>,
+}
+
+pub async fn get_pending_requests(
+    State(state): State<crate::AppState>,
+    axum::extract::Extension(user_id): axum::extract::Extension<i64>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let requests = state
+        .svc
+        .friend_store
+        .get_pending_requests(user_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let list: Vec<FriendRequestResponse> = requests
+        .iter()
+        .map(|r| FriendRequestResponse {
+            id: r.id,
+            sender_id: r.from_user_id,
+            receiver_id: r.to_user_id,
+            status: r.status.clone(),
+            ts: r.created_at,
+        })
+        .collect();
+
+    Ok(Json(GetPendingRequestsResponse { requests: list }))
+}

@@ -202,15 +202,6 @@ impl UserStore {
         Ok(result.rows_affected())
     }
 
-    pub async fn delete(&self, id: i64) -> Result<u64, sqlx::Error> {
-        let query = r#"DELETE FROM users WHERE id = $1"#;
-        let result = sqlx::query(query)
-            .bind(id)
-            .execute(&self.store.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
-
     pub async fn delete_tx(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -383,26 +374,6 @@ impl MessageStore {
             .await
     }
 
-    pub async fn get_messages_by_user(
-        &self,
-        user_id: i64,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<Message>, sqlx::Error> {
-        let query = r#"
-            SELECT msg_id, conv_id, from_uid, content, ts, is_recalled
-            FROM messages
-            WHERE from_uid = $1
-            ORDER BY ts DESC
-            LIMIT $2 OFFSET $3"#;
-        sqlx::query_as::<_, Message>(query)
-            .bind(user_id)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.store.pool)
-            .await
-    }
-
     pub async fn insert_message(&self, msg: &Message) -> Result<i64, sqlx::Error> {
         let query = r#"
             INSERT INTO messages (msg_id, conv_id, from_uid, content, ts, is_recalled)
@@ -452,15 +423,6 @@ impl MessageStore {
             .bind(msg.ts)
             .bind(msg.is_recalled)
             .bind(msg.msg_id)
-            .execute(&self.store.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
-
-    pub async fn delete_message(&self, msg_id: i64) -> Result<u64, sqlx::Error> {
-        let query = r#"DELETE FROM messages WHERE msg_id = $1"#;
-        let result = sqlx::query(query)
-            .bind(msg_id)
             .execute(&self.store.pool)
             .await?;
         Ok(result.rows_affected())
@@ -557,24 +519,6 @@ impl MessageStore {
             has_more,
             max_msg_id,
         })
-    }
-
-    pub async fn get_message_count(&self, conv_id: &str) -> Result<i64, sqlx::Error> {
-        let query = r#"SELECT COUNT(*) FROM messages WHERE conv_id = $1"#;
-        let count: i64 = sqlx::query_scalar(query)
-            .bind(conv_id)
-            .fetch_one(&self.store.pool)
-            .await?;
-        Ok(count)
-    }
-
-    pub async fn message_exists(&self, msg_id: i64) -> Result<bool, sqlx::Error> {
-        let query = r#"SELECT EXISTS(SELECT 1 FROM messages WHERE msg_id = $1)"#;
-        let exists: bool = sqlx::query_scalar(query)
-            .bind(msg_id)
-            .fetch_one(&self.store.pool)
-            .await?;
-        Ok(exists)
     }
 
     pub async fn ensure_partition(&self, table_name: &str) -> Result<(), sqlx::Error> {
@@ -688,16 +632,6 @@ impl GroupStore {
             .await
     }
 
-    pub async fn get_by_name(&self, name: &str) -> Result<Option<Group>, sqlx::Error> {
-        let query = r#"
-            SELECT group_id, name, description, owner_id, created_at, updated_at, is_deleted
-            FROM groups WHERE name = $1 AND is_deleted = 0"#;
-        sqlx::query_as::<_, Group>(query)
-            .bind(name)
-            .fetch_optional(&self.store.pool)
-            .await
-    }
-
     pub async fn get_groups_by_owner(&self, owner_id: i64) -> Result<Vec<Group>, sqlx::Error> {
         let query = r#"
             SELECT group_id, name, description, owner_id, created_at, updated_at, is_deleted
@@ -741,15 +675,6 @@ impl GroupStore {
         Ok(result.rows_affected())
     }
 
-    pub async fn delete(&self, group_id: &str) -> Result<u64, sqlx::Error> {
-        let query = r#"UPDATE groups SET is_deleted = 1 WHERE group_id = $1"#;
-        let result = sqlx::query(query)
-            .bind(group_id)
-            .execute(&self.store.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
-
     pub async fn get_member_count(&self, group_id: &str) -> Result<i64, sqlx::Error> {
         let query = r#"SELECT COUNT(*) FROM group_members WHERE group_id = $1"#;
         let count: i64 = sqlx::query_scalar(query)
@@ -768,17 +693,6 @@ pub struct GroupMemberStore {
 impl GroupMemberStore {
     pub fn new(store: Store) -> Self {
         Self { store }
-    }
-
-    pub async fn get(&self, group_id: &str, uid: i64) -> Result<Option<GroupMember>, sqlx::Error> {
-        let query = r#"
-            SELECT id, group_id, uid, role, joined_at
-            FROM group_members WHERE group_id = $1 AND uid = $2"#;
-        sqlx::query_as::<_, GroupMember>(query)
-            .bind(group_id)
-            .bind(uid)
-            .fetch_optional(&self.store.pool)
-            .await
     }
 
     pub async fn get_tx(
@@ -813,20 +727,6 @@ impl GroupMemberStore {
         Ok(result.unwrap_or(0))
     }
 
-    pub async fn delete_by_group_and_user(
-        &self,
-        group_id: &str,
-        uid: i64,
-    ) -> Result<u64, sqlx::Error> {
-        let query = r#"DELETE FROM group_members WHERE group_id = $1 AND uid = $2"#;
-        let result = sqlx::query(query)
-            .bind(group_id)
-            .bind(uid)
-            .execute(&self.store.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
-
     pub async fn delete_by_group_and_user_tx(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -842,15 +742,6 @@ impl GroupMemberStore {
         Ok(result.rows_affected())
     }
 
-    pub async fn delete_by_user(&self, uid: i64) -> Result<u64, sqlx::Error> {
-        let query = r#"DELETE FROM group_members WHERE uid = $1"#;
-        let result = sqlx::query(query)
-            .bind(uid)
-            .execute(&self.store.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
-
     pub async fn delete_by_user_tx(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -859,15 +750,6 @@ impl GroupMemberStore {
         let query = r#"DELETE FROM group_members WHERE uid = $1"#;
         let result = sqlx::query(query).bind(uid).execute(&mut **tx).await?;
         Ok(result.rows_affected())
-    }
-
-    pub async fn count_by_group(&self, group_id: &str) -> Result<i64, sqlx::Error> {
-        let query = r#"SELECT COUNT(*) FROM group_members WHERE group_id = $1"#;
-        let count: i64 = sqlx::query_scalar(query)
-            .bind(group_id)
-            .fetch_one(&self.store.pool)
-            .await?;
-        Ok(count)
     }
 
     pub async fn delete_by_group_tx(
@@ -998,24 +880,6 @@ impl FriendRequestStore {
             .execute(&self.store.pool)
             .await?;
         Ok(result.rows_affected())
-    }
-
-    pub async fn check_request_exists(
-        &self,
-        from_user_id: i64,
-        to_user_id: i64,
-    ) -> Result<bool, sqlx::Error> {
-        let query = r#"
-            SELECT EXISTS(
-                SELECT 1 FROM friend_requests
-                WHERE from_user_id = $1 AND to_user_id = $2 AND status = 'pending'
-            )"#;
-        let exists: bool = sqlx::query_scalar(query)
-            .bind(from_user_id)
-            .bind(to_user_id)
-            .fetch_one(&self.store.pool)
-            .await?;
-        Ok(exists)
     }
 
     pub async fn has_pending_requests(&self, user_id: i64) -> Result<bool, sqlx::Error> {
@@ -1473,19 +1337,6 @@ impl IdGeneratorStateStore {
             .fetch_one(&self.store.pool)
             .await?;
         Ok(id)
-    }
-
-    pub async fn update(&self, state: &IdGeneratorState) -> Result<u64, sqlx::Error> {
-        let query = r#"
-            UPDATE id_generator_state SET last_ts = $1, epoch_time = $2
-            WHERE id = $3"#;
-        let result = sqlx::query(query)
-            .bind(state.last_ts)
-            .bind(state.epoch_time)
-            .bind(state.id)
-            .execute(&self.store.pool)
-            .await?;
-        Ok(result.rows_affected())
     }
 
     pub async fn insert_with_tx(

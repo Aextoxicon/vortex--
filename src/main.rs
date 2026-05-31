@@ -258,6 +258,22 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
             axum::routing::get(messaging::get_conversations),
         )
         .route(
+            "/conversations/count",
+            axum::routing::get(messaging::get_conversation_count),
+        )
+        .route(
+            "/conversations/:conv_id/participants",
+            axum::routing::get(messaging::get_conversation_participants),
+        )
+        .route(
+            "/conversations/:conv_id/blocked/:user_id",
+            axum::routing::get(messaging::check_blocked),
+        )
+        .route(
+            "/messages/:msg_id",
+            axum::routing::get(messaging::get_message),
+        )
+        .route(
             "/blocks/:target_public_id",
             axum::routing::post(friend::block_user),
         )
@@ -279,12 +295,20 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
             axum::routing::delete(groups::kick_member),
         )
         .route(
+            "/groups/:id/members/count",
+            axum::routing::get(groups::get_group_member_count),
+        )
+        .route(
             "/friends/request/send/:target_public_id",
             axum::routing::post(friend::send_friend_request),
         )
         .route(
             "/friends/requests",
             axum::routing::get(friend::get_friend_requests),
+        )
+        .route(
+            "/friends/requests/pending",
+            axum::routing::get(friend::get_pending_requests),
         )
         .route(
             "/friends/request/:request_id/accept",

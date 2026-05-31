@@ -472,3 +472,26 @@ pub async fn kick_member(
 
     Ok(Json(json!({ "message": "Member kicked successfully" })))
 }
+
+#[derive(Debug, Serialize)]
+pub struct GetGroupMemberCountResponse {
+    pub group_id: String,
+    pub count: i64,
+}
+
+pub async fn get_group_member_count(
+    State(state): State<crate::AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let count = state
+        .svc
+        .group_store
+        .get_member_count(&id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(GetGroupMemberCountResponse {
+        group_id: id,
+        count,
+    }))
+}

@@ -18,8 +18,6 @@ async fn setup_test_service() -> (TestFixture, shared::Service) {
         bcrypt_cost: 4,
         message_recall_window_ms: 120_000,
         epoch_time: 1700000000000,
-        segment_duration_ms: 3600000,
-        segment_size: 1000,
         message_retention_days: 7,
         default_page_size: 20,
         max_page_size: 100,
@@ -407,4 +405,170 @@ async fn test_get_received_friend_requests() {
 
     let requests = svc.get_received_requests(user2.id).await.unwrap();
     assert!(!requests.is_empty());
+}
+
+#[tokio::test]
+async fn test_get_group_member_count() {
+    let (_fixture, svc) = setup_test_service().await;
+
+    let owner_name = unique_username();
+    let owner = svc
+        .create_user(
+            owner_name.clone(),
+            "Test1234!".to_string(),
+            format!("{}@example.com", owner_name),
+        )
+        .await
+        .unwrap();
+
+    let member_name = unique_username();
+    let member = svc
+        .create_user(
+            member_name.clone(),
+            "Test1234!".to_string(),
+            format!("{}@example.com", member_name),
+        )
+        .await
+        .unwrap();
+
+    let group_id = svc.create_group("Count Group", "", owner.id).await.unwrap();
+
+    let count_before = svc
+        .group_store
+        .get_member_count(&group_id)
+        .await
+        .unwrap();
+    assert_eq!(count_before, 1);
+
+    svc.add_member(&group_id, member.id, "member")
+        .await
+        .unwrap();
+
+    let count_after = svc
+        .group_store
+        .get_member_count(&group_id)
+        .await
+        .unwrap();
+    assert_eq!(count_after, 2);
+}
+
+#[tokio::test]
+async fn test_get_pending_friend_requests() {
+    let (_fixture, svc) = setup_test_service().await;
+
+    let user1_name = unique_username();
+    let user1 = svc
+        .create_user(
+            user1_name.clone(),
+            "Test1234!".to_string(),
+            format!("{}@example.com", user1_name),
+        )
+        .await
+        .unwrap();
+
+    let user2_name = unique_username();
+    let user2 = svc
+        .create_user(
+            user2_name.clone(),
+            "Test1234!".to_string(),
+            format!("{}@example.com", user2_name),
+        )
+        .await
+        .unwrap();
+
+    svc.send_friend_request(user1.id, user2.id, "".to_string())
+        .await
+        .unwrap();
+
+    let pending = svc
+        .friend_store
+        .get_pending_requests(user2.id)
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].from_user_id, user1.id);
+    assert_eq!(pending[0].status, "pending");
+}
+
+#[tokio::test]
+async fn test_conversation_count() {
+    let (_fixture, svc) = setup_test_service().await;
+
+    let user1_name = unique_username();
+    let user1 = svc
+        .create_user(
+            user1_name.clone(),
+            "Test1234!".to_string(),
+            format!("{}@example.com", user1_name),
+        )
+        .await
+        .unwrap();
+
+    let user2_name = unique_username();
+    let user2 = svc
+        .create_user(
+            user2_name.clone(),
+            "Test1234!".to_string(),
+            format!("{}@example.com", user2_name),
+        )
+        .await
+        .unwrap();
+
+    let conv_id = crate::shared::private_conv_id(&user1.public_id, &user2.public_id);
+    svc.create_conversation(&conv_id, user1.id, user2.id)
+        .await
+        .unwrap();
+
+    let count = svc
+        .conv_part_store
+        .count_user_conversations(user1.id)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn test_conversation_is_blocked() {
+    let (_fixture, svc) = setup_test_service().await;
+
+    let user1_name = unique_username();
+    let user1 = svc
+        .create_user(
+            user1_name.clone(),
+            "Test1234!".to_string(),
+            format!("{}@example.com", user1_name),
+        )
+        .await
+        .unwrap();
+
+    let user2_name = unique_username();
+    let user2 = svc
+        .create_user(
+            user2_name.clone(),
+            "Test1234!".to_string(),
+            format!("{}@example.com", user2_name),
+        )
+        .await
+        .unwrap();
+
+    let conv_id = crate::shared::private_conv_id(&user1.public_id, &user2.public_id);
+    svc.create_conversation(&conv_id, user1.id, user2.id)
+        .await
+        .unwrap();
+
+    let blocked_before = svc
+        .conv_part_store
+        .is_blocked(&conv_id, user2.id)
+        .await
+        .unwrap();
+    assert!(!blocked_before);
+
+    svc.block_user(&conv_id, user2.id).await.unwrap();
+
+    let blocked_after = svc
+        .conv_part_store
+        .is_blocked(&conv_id, user2.id)
+        .await
+        .unwrap();
+    assert!(blocked_after);
 }

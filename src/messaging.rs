@@ -369,10 +369,12 @@ impl Service {
 
         self.msg_store.update_message(&updated_msg).await?;
 
-        if self.s3_service.is_some() {
+        if let Some(s3) = &self.s3_service {
             let file_key = extract_file_key_from_message(&msg);
-            if !file_key.is_empty() {
-                tracing::warn!("S3 delete not implemented yet: file_key={}", file_key);
+            if !file_key.is_empty()
+                && let Err(e) = s3.delete_object(&file_key).await
+            {
+                tracing::warn!(file_key = %file_key, error = e.message, "failed to delete S3 object on recall");
             }
         }
 
@@ -749,4 +751,114 @@ pub async fn get_conversations(
 pub struct GetConversationsQuery {
     pub limit: Option<i32>,
     pub offset: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GetConversationParticipantsResponse {
+    pub conv_id: String,
+    pub participants: Vec<i64>,
+}
+
+pub async fn get_conversation_participants(
+    State(state): State<crate::AppState>,
+    axum::extract::Path(conv_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let participants = state
+        .svc
+        .conv_part_store
+        .get_participants(&conv_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(GetConversationParticipantsResponse {
+        conv_id,
+        participants,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct GetMessageResponse {
+    pub msg_id: i64,
+    pub conv_id: String,
+    pub from_uid: i64,
+    pub content: String,
+    pub ts: i64,
+    pub is_recalled: bool,
+}
+
+pub async fn get_message(
+    State(state): State<crate::AppState>,
+    axum::extract::Path(msg_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let msg_id: i64 = msg_id
+        .parse()
+        .map_err(|_| AppError::bad_request("invalid msg_id"))?;
+
+    let msg = state
+        .svc
+        .msg_store
+        .get_message(msg_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    match msg {
+        Some(m) => Ok(Json(GetMessageResponse {
+            msg_id: m.msg_id,
+            conv_id: m.conv_id,
+            from_uid: m.from_uid,
+            content: m.content,
+            ts: m.ts,
+            is_recalled: m.is_recalled != 0,
+        })),
+        None => Err(AppError::not_found("message not found")),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct CheckBlockedResponse {
+    pub conv_id: String,
+    pub user_id: i64,
+    pub is_blocked: bool,
+}
+
+pub async fn check_blocked(
+    State(state): State<crate::AppState>,
+    axum::extract::Path((conv_id, user_id)): axum::extract::Path<(String, String)>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let user_id: i64 = user_id
+        .parse()
+        .map_err(|_| AppError::bad_request("invalid user_id"))?;
+
+    let is_blocked = state
+        .svc
+        .conv_part_store
+        .is_blocked(&conv_id, user_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(CheckBlockedResponse {
+        conv_id,
+        user_id,
+        is_blocked,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct GetConversationCountResponse {
+    pub user_id: i64,
+    pub count: i64,
+}
+
+pub async fn get_conversation_count(
+    State(state): State<crate::AppState>,
+    axum::extract::Extension(user_id): axum::extract::Extension<i64>,
+) -> Result<impl IntoResponse + use<>, AppError> {
+    let count = state
+        .svc
+        .conv_part_store
+        .count_user_conversations(user_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(GetConversationCountResponse { user_id, count }))
 }

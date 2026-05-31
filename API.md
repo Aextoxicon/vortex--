@@ -18,12 +18,17 @@
 - [消息](#消息)
   - [发送消息](#发送消息)
   - [获取消息](#获取消息)
+  - [获取消息详情](#获取消息详情)
   - [撤回消息](#撤回消息)
   - [检查新消息](#检查新消息)
   - [获取会话列表](#获取会话列表)
+  - [获取会话数](#获取会话数)
+  - [获取会话参与者](#获取会话参与者)
+  - [检查屏蔽状态](#检查屏蔽状态)
 - [好友](#好友)
   - [发送好友请求](#发送好友请求)
   - [获取好友请求列表](#获取好友请求列表)
+  - [获取待处理好友请求](#获取待处理好友请求)
   - [接受好友请求](#接受好友请求)
   - [拒绝好友请求](#拒绝好友请求)
   - [取消好友请求](#取消好友请求)
@@ -37,6 +42,7 @@
   - [加入群组](#加入群组)
   - [退出群组](#退出群组)
   - [踢出成员](#踢出成员)
+  - [获取群组成员数](#获取群组成员数)
 - [文件](#文件)
   - [获取预签名URL](#获取预签名url)
 - [健康检查](#健康检查)
@@ -379,6 +385,50 @@ GET /api/messages?conv_id=<conv_id>&lastMsgId=<last_msg_id>&page_size=<page_size
 
 ---
 
+# 获取消息详情
+
+获取单条消息的详细信息。
+
+**请求**
+```
+GET /api/messages/:msgId
+```
+
+**认证**: 需要 Bearer Token
+
+**路径参数**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| msgId | int | 消息ID |
+
+**响应 200 OK**
+```json
+{
+  "msg_id": 12345,
+  "conv_id": "p_abc123_def456",
+  "from_uid": 456,
+  "content": "Hello!",
+  "ts": 1715673600000,
+  "is_recalled": false
+}
+```
+
+**字段说明**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| msg_id | int | 消息ID |
+| conv_id | string | 会话ID |
+| from_uid | int | 发送者用户ID |
+| content | string | 消息内容 |
+| ts | int | 消息时间戳（毫秒） |
+| is_recalled | bool | 是否已撤回 |
+
+**错误响应**
+- `400` - 无效的消息ID格式
+- `404` - 消息不存在
+
+---
+
 # 撤回消息
 
 撤回已发送的消息（2分钟内）。
@@ -533,6 +583,106 @@ GET /api/conversations
 
 ---
 
+# 获取会话数
+
+获取当前用户参与的会话总数。
+
+**请求**
+```
+GET /api/conversations/count
+```
+
+**认证**: 需要 Bearer Token
+
+**响应 200 OK**
+```json
+{
+  "user_id": 456,
+  "count": 15
+}
+```
+
+**字段说明**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| user_id | int | 用户ID |
+| count | int | 会话总数 |
+
+---
+
+# 获取会话参与者
+
+获取指定会话的所有参与者用户ID列表。
+
+**请求**
+```
+GET /api/conversations/:convId/participants
+```
+
+**认证**: 需要 Bearer Token
+
+**路径参数**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| convId | string | 会话ID |
+
+**响应 200 OK**
+```json
+{
+  "conv_id": "p_abc123_def456",
+  "participants": [123, 456]
+}
+```
+
+**字段说明**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| conv_id | string | 会话ID |
+| participants | int[] | 参与者用户ID列表 |
+
+**错误响应**
+- `404` - 会话不存在
+
+---
+
+# 检查屏蔽状态
+
+检查指定用户在会话中是否被屏蔽。
+
+**请求**
+```
+GET /api/conversations/:convId/blocked/:userId
+```
+
+**认证**: 需要 Bearer Token
+
+**路径参数**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| convId | string | 会话ID |
+| userId | int | 用户ID |
+
+**响应 200 OK**
+```json
+{
+  "conv_id": "p_abc123_def456",
+  "user_id": 456,
+  "is_blocked": false
+}
+```
+
+**字段说明**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| conv_id | string | 会话ID |
+| user_id | int | 用户ID |
+| is_blocked | bool | 是否被屏蔽 |
+
+**错误响应**
+- `400` - 无效的用户ID格式
+
+---
+
 # 好友
 
 # 发送好友请求
@@ -608,6 +758,43 @@ GET /api/friends/requests
   ]
 }
 ```
+
+---
+
+# 获取待处理好友请求
+
+获取收到的待处理好友请求列表。
+
+**请求**
+```
+GET /api/friends/requests/pending
+```
+
+**认证**: 需要 Bearer Token
+
+**响应 200 OK**
+```json
+{
+  "requests": [
+    {
+      "id": 124,
+      "sender_id": 789,
+      "receiver_id": 456,
+      "status": "pending",
+      "ts": 1715673600000
+    }
+  ]
+}
+```
+
+**字段说明**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | int | 好友请求ID |
+| sender_id | int | 发送者用户ID |
+| receiver_id | int | 接收者用户ID |
+| status | string | 请求状态：pending/accepted/rejected |
+| ts | int | 请求创建时间戳（毫秒） |
 
 ---
 
@@ -976,6 +1163,41 @@ DELETE /api/groups/:id/members/:memberPublicId
 
 ---
 
+# 获取群组成员数
+
+获取指定群组的成员数量。
+
+**请求**
+```
+GET /api/groups/:id/members/count
+```
+
+**认证**: 需要 Bearer Token
+
+**路径参数**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | string | 群组ID |
+
+**响应 200 OK**
+```json
+{
+  "group_id": "g_abc123",
+  "count": 5
+}
+```
+
+**字段说明**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| group_id | string | 群组ID |
+| count | int | 群组成员数量 |
+
+**错误响应**
+- `404` - 群组不存在
+
+---
+
 # 文件
 
 # 获取预签名URL
@@ -1183,6 +1405,13 @@ GET /metrics
 
 # 版本历史
 
+- **v1.2** (2026-05-31)
+  - 新增 `GET /api/messages/:msgId` 获取消息详情
+  - 新增 `GET /api/conversations/count` 获取用户会话数
+  - 新增 `GET /api/conversations/:convId/participants` 获取会话参与者
+  - 新增 `GET /api/conversations/:convId/blocked/:userId` 检查屏蔽状态
+  - 新增 `GET /api/friends/requests/pending` 获取待处理好友请求
+  - 新增 `GET /api/groups/:id/members/count` 获取群组成员数
 - **v1.1** (2026-05-26)
   - 消息幂等性支持（client_msg_id）
   - 新增 /metrics 运行时指标端点

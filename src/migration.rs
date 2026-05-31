@@ -218,12 +218,6 @@ async fn create_messages_parent_table(pool: &PgPool) -> Result<(), sqlx::Error> 
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        r#"CREATE INDEX IF NOT EXISTS idx_messages_conv_ts ON messages (conv_id, ts DESC, msg_id DESC)"#,
-    )
-    .execute(pool)
-    .await?;
-
     Ok(())
 }
 
