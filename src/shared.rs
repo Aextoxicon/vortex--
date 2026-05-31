@@ -22,16 +22,16 @@ pub type UserCache = moka::sync::Cache<i64, User>;
 #[derive(Clone)]
 pub struct Service {
     pub(crate) cfg: Config,
-    pub(crate) pool: PgPool,
-    pub(crate) user_store: UserStore,
-    pub(crate) msg_store: MessageStore,
-    pub(crate) group_store: GroupStore,
-    pub(crate) group_mem_store: GroupMemberStore,
-    pub(crate) friend_store: FriendRequestStore,
-    pub(crate) conv_part_store: ConversationParticipantStore,
-    pub(crate) idempotency_store: MessageIdempotencyStore,
-    pub(crate) id_gen: IdGenerator,
-    pub(crate) s3_service: Option<S3Service>,
+    pub pool: PgPool,
+    pub user_store: UserStore,
+    pub msg_store: MessageStore,
+    pub group_store: GroupStore,
+    pub group_mem_store: GroupMemberStore,
+    pub friend_store: FriendRequestStore,
+    pub conv_part_store: ConversationParticipantStore,
+    pub idempotency_store: MessageIdempotencyStore,
+    pub id_gen: IdGenerator,
+    pub s3_service: Option<S3Service>,
     pub(crate) user_cache: UserCache,
 }
 
