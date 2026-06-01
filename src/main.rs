@@ -233,7 +233,8 @@ async fn init_db(cfg: &Config) -> Result<sqlx::PgPool, String> {
 fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
     let public_routes = Router::new()
         .route("/api/auth/register", axum::routing::post(account::register))
-        .route("/api/auth/login", axum::routing::post(account::login));
+        .route("/api/auth/login", axum::routing::post(account::login))
+        .with_state((*app_state).clone());
 
     let protected_routes = Router::new()
         .route("/api/auth/me", axum::routing::get(account::get_me))
