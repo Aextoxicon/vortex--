@@ -14,12 +14,13 @@ async fn setup_test_store() -> (TestFixture, store::Store) {
 
 async fn create_test_user(user_store: &store::UserStore) -> store::User {
     let now = chrono::Utc::now().timestamp_millis();
+    let uname = unique_username();
     let user = store::User {
         id: 0,
-        public_id: format!("pub_{}", unique_username()),
-        username: unique_username(),
+        public_id: format!("pub_{}", uname),
+        username: uname.clone(),
         pwd_hash: "hashed_password".to_string(),
-        email: "test@example.com".to_string(),
+        email: format!("{}@example.com", uname),
         created_at: now,
         updated_at: now,
     };
