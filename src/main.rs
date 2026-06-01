@@ -231,12 +231,12 @@ async fn init_db(cfg: &Config) -> Result<sqlx::PgPool, String> {
 }
 
 fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
-    let public_routes = Router::new()
+    let app = Router::new()
+        .route("/health", axum::routing::get(shared::health_check))
+        .route("/ready", axum::routing::get(shared::readiness_check))
+        .route("/metrics", axum::routing::get(metrics::metrics))
         .route("/api/auth/register", axum::routing::post(account::register))
         .route("/api/auth/login", axum::routing::post(account::login))
-        .with_state((*app_state).clone());
-
-    let protected_routes = Router::new()
         .route("/api/auth/me", axum::routing::get(account::get_me))
         .route("/api/auth/logout", axum::routing::post(account::logout))
         .route(
@@ -340,13 +340,6 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
             (*app_state).clone(),
             jwt::auth_middleware,
         ));
-
-    let app = Router::new()
-        .route("/health", axum::routing::get(shared::health_check))
-        .route("/ready", axum::routing::get(shared::readiness_check))
-        .route("/metrics", axum::routing::get(metrics::metrics))
-        .merge(public_routes)
-        .merge(protected_routes);
 
     let app = app
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_SIZE))
