@@ -231,10 +231,7 @@ async fn init_db(cfg: &Config) -> Result<sqlx::PgPool, String> {
 }
 
 fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
-    let app = Router::new()
-        .route("/health", axum::routing::get(shared::health_check))
-        .route("/ready", axum::routing::get(shared::readiness_check))
-        .route("/metrics", axum::routing::get(metrics::metrics))
+    let api_routes = Router::new()
         .route("/api/auth/register", axum::routing::post(account::register))
         .route("/api/auth/login", axum::routing::post(account::login))
         .route("/api/auth/me", axum::routing::get(account::get_me))
@@ -339,7 +336,14 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
         .route_layer(axum::middleware::from_fn_with_state(
             (*app_state).clone(),
             jwt::auth_middleware,
-        ));
+        ))
+        .with_state((*app_state).clone());
+
+    let app = Router::new()
+        .route("/health", axum::routing::get(shared::health_check))
+        .route("/ready", axum::routing::get(shared::readiness_check))
+        .route("/metrics", axum::routing::get(metrics::metrics))
+        .merge(api_routes);
 
     let app = app
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_SIZE))
