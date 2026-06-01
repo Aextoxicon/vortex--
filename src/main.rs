@@ -232,97 +232,109 @@ async fn init_db(cfg: &Config) -> Result<sqlx::PgPool, String> {
 
 fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
     let public_routes = Router::new()
-        .route("/auth/register", axum::routing::post(account::register))
-        .route("/auth/login", axum::routing::post(account::login));
+        .route("/api/auth/register", axum::routing::post(account::register))
+        .route("/api/auth/login", axum::routing::post(account::login));
 
     let protected_routes = Router::new()
-        .route("/auth/me", axum::routing::get(account::get_me))
-        .route("/auth/logout", axum::routing::post(account::logout))
-        .route("/auth/:public_id", axum::routing::put(account::update_user))
+        .route("/api/auth/me", axum::routing::get(account::get_me))
+        .route("/api/auth/logout", axum::routing::post(account::logout))
         .route(
-            "/auth/:public_id",
+            "/api/auth/:public_id",
+            axum::routing::put(account::update_user),
+        )
+        .route(
+            "/api/auth/:public_id",
             axum::routing::delete(account::delete_user),
         )
         .route(
-            "/messages/send",
+            "/api/messages/send",
             axum::routing::post(messaging::send_message),
         )
-        .route("/messages", axum::routing::get(messaging::get_messages))
+        .route("/api/messages", axum::routing::get(messaging::get_messages))
         .route(
-            "/messages/recall/:msg_id",
+            "/api/messages/recall/:msg_id",
             axum::routing::post(messaging::recall_message),
         )
-        .route("/check", axum::routing::get(messaging::check_new_messages))
         .route(
-            "/conversations",
+            "/api/check",
+            axum::routing::get(messaging::check_new_messages),
+        )
+        .route(
+            "/api/conversations",
             axum::routing::get(messaging::get_conversations),
         )
         .route(
-            "/conversations/count",
+            "/api/conversations/count",
             axum::routing::get(messaging::get_conversation_count),
         )
         .route(
-            "/conversations/:conv_id/participants",
+            "/api/conversations/:conv_id/participants",
             axum::routing::get(messaging::get_conversation_participants),
         )
         .route(
-            "/conversations/:conv_id/blocked/:user_id",
+            "/api/conversations/:conv_id/blocked/:user_id",
             axum::routing::get(messaging::check_blocked),
         )
         .route(
-            "/messages/:msg_id",
+            "/api/messages/:msg_id",
             axum::routing::get(messaging::get_message),
         )
         .route(
-            "/blocks/:target_public_id",
+            "/api/blocks/:target_public_id",
             axum::routing::post(friend::block_user),
         )
         .route(
-            "/blocks/:target_public_id",
+            "/api/blocks/:target_public_id",
             axum::routing::delete(friend::unblock_user),
         )
-        .route("/groups", axum::routing::post(groups::create_group))
-        .route("/groups/:id", axum::routing::get(groups::get_group))
-        .route("/groups/:id", axum::routing::put(groups::update_group))
-        .route("/groups/:id", axum::routing::delete(groups::delete_group))
-        .route("/groups/:id/join", axum::routing::post(groups::join_group))
+        .route("/api/groups", axum::routing::post(groups::create_group))
+        .route("/api/groups/:id", axum::routing::get(groups::get_group))
+        .route("/api/groups/:id", axum::routing::put(groups::update_group))
         .route(
-            "/groups/:id/leave",
+            "/api/groups/:id",
+            axum::routing::delete(groups::delete_group),
+        )
+        .route(
+            "/api/groups/:id/join",
+            axum::routing::post(groups::join_group),
+        )
+        .route(
+            "/api/groups/:id/leave",
             axum::routing::post(groups::leave_group),
         )
         .route(
-            "/groups/:id/members/:member_public_id",
+            "/api/groups/:id/members/:member_public_id",
             axum::routing::delete(groups::kick_member),
         )
         .route(
-            "/groups/:id/members/count",
+            "/api/groups/:id/members/count",
             axum::routing::get(groups::get_group_member_count),
         )
         .route(
-            "/friends/request/send/:target_public_id",
+            "/api/friends/request/send/:target_public_id",
             axum::routing::post(friend::send_friend_request),
         )
         .route(
-            "/friends/requests",
+            "/api/friends/requests",
             axum::routing::get(friend::get_friend_requests),
         )
         .route(
-            "/friends/requests/pending",
+            "/api/friends/requests/pending",
             axum::routing::get(friend::get_pending_requests),
         )
         .route(
-            "/friends/request/:request_id/accept",
+            "/api/friends/request/:request_id/accept",
             axum::routing::post(friend::accept_friend_request),
         )
         .route(
-            "/friends/request/:request_id/reject",
+            "/api/friends/request/:request_id/reject",
             axum::routing::post(friend::reject_friend_request),
         )
         .route(
-            "/friends/request/:request_id",
+            "/api/friends/request/:request_id",
             axum::routing::delete(friend::cancel_friend_request),
         )
-        .route("/files/presign", axum::routing::post(s3::presign))
+        .route("/api/files/presign", axum::routing::post(s3::presign))
         .route_layer(axum::middleware::from_fn_with_state(
             (*app_state).clone(),
             jwt::auth_middleware,
@@ -332,8 +344,8 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
         .route("/health", axum::routing::get(shared::health_check))
         .route("/ready", axum::routing::get(shared::readiness_check))
         .route("/metrics", axum::routing::get(metrics::metrics))
-        .nest("/api", public_routes)
-        .nest("/api", protected_routes);
+        .merge(public_routes)
+        .merge(protected_routes);
 
     let app = app
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_SIZE))
