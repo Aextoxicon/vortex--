@@ -328,13 +328,12 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
             jwt::auth_middleware,
         ));
 
-    let api_routes = public_routes.merge(protected_routes);
-
     let app = Router::new()
         .route("/health", axum::routing::get(shared::health_check))
         .route("/ready", axum::routing::get(shared::readiness_check))
         .route("/metrics", axum::routing::get(metrics::metrics))
-        .nest("/api", api_routes);
+        .nest("/api", public_routes)
+        .nest("/api", protected_routes);
 
     let app = app
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_SIZE))
