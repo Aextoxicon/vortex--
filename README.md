@@ -20,7 +20,7 @@ vortex/
 │   ├── migration.rs       # 数据库迁移：表结构创建和版本管理
 │   ├── store.rs           # 数据访问层：所有数据库 CRUD 操作
 │   ├── s3.rs              # 文件模块：S3 预签名 URL 生成、文件权限控制
-│   ├── shared.rs          # 共享组件：Service结构体、健康检查、通知系统、WebSocket推送
+│   ├── shared.rs          # 共享组件：Service结构体、健康检查、通知系统
 │   ├── worker.rs          # 后台任务：定时任务、数据清理、表分区管理
 │   └── metrics.rs         # 指标模块：性能监控和统计
 ├── tests/                 # 集成测试
@@ -43,7 +43,7 @@ vortex/
 
 # 环境要求
 
-- Rust 1.70+
+- Rust 1.85+
 - PostgreSQL 16+
 - Docker (可选，用于测试)
 - S3 服务
@@ -51,8 +51,8 @@ vortex/
 # 安装
 
 ```bash
-git clone https://github.com/vortex--/vortex.git
-cd vortex
+git clone https://github.com/Lwh20/vortex--.git
+cd vortex--
 cargo build --release
 mkdir -p /opt/vortex/
 cp target/release/vortex /opt/vortex/
@@ -126,6 +126,7 @@ make test-all
 | POST | `/api/friends/request/:requestId/accept` | 是 | 接受请求 |
 | POST | `/api/friends/request/:requestId/reject` | 是 | 拒绝请求 |
 | DELETE | `/api/friends/request/:requestId` | 是 | 取消请求 |
+| POST | `/api/friends/requests/pending` | 是 | 获取待处理好友请求 |
 | POST | `/api/blocks/:targetPublicId` | 是 | 拉黑用户 |
 | DELETE | `/api/blocks/:targetPublicId` | 是 | 取消拉黑 |
 
@@ -225,9 +226,9 @@ curl -X POST http://localhost:8080/api/groups \
 
 | 字段 | 规则 |
 |------|------|
-| username | 3-20字符，字母数字下划线 |
-| password | 8-72字符，含大小写+数字+特殊字符 |
-| email | 标准邮箱格式 |
+| username | 3-20字符，字母数字下划线及中日韩字符 |
+| password | 8-128字符，含大小写+数字+特殊字符(!@#$%^&*()) |
+| email | 标准邮箱格式，最大100字符 |
 | group name | 1-50字符 |
 | message | 最大1000字符 |
 

@@ -61,7 +61,7 @@ components:
       properties:
         id:
           type: string
-          example: msg_xyz789
+          example: "123456789"
         conv_id:
           type: string
           example: conv_abc123
@@ -82,9 +82,9 @@ components:
     Group:
       type: object
       properties:
-        id:
+        group_id:
           type: string
-          example: grp_abc123
+          example: g_abc123XYZ
         name:
           type: string
           example: My Group
@@ -94,6 +94,17 @@ components:
         owner_id:
           type: string
           example: abc123XYZ
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              public_id:
+                type: string
+              username:
+                type: string
+              role:
+                type: string
         created_at:
           type: string
           format: date-time
@@ -104,13 +115,18 @@ components:
         id:
           type: integer
           example: 123
+        sender_id:
+          type: integer
+          example: 456
+        receiver_id:
+          type: integer
+          example: 789
         status:
           type: string
-          enum: [pending, accepted, rejected]
-        sender_public_id:
-          type: string
-        receiver_public_id:
-          type: string
+          enum: [pending, accepted, rejected, auto_accepted]
+        ts:
+          type: integer
+          example: 1715673600000
 
 paths:
   /health:
@@ -207,7 +223,7 @@ paths:
                 password:
                   type: string
                   minLength: 8
-                  maxLength: 72
+                  maxLength: 128
                   example: SecurePass123!
                 email:
                   type: string
@@ -301,9 +317,12 @@ paths:
               schema:
                 type: object
                 properties:
+                  success:
+                    type: boolean
+                    example: true
                   message:
                     type: string
-                    example: logged out successfully
+                    example: Logged out successfully
 
   /api/auth/{publicId}:
     put:
@@ -337,8 +356,12 @@ paths:
               schema:
                 type: object
                 properties:
-                  user:
-                    $ref: '#/components/schemas/User'
+                  public_id:
+                    type: string
+                  username:
+                    type: string
+                  email:
+                    type: string
     delete:
       tags: [auth]
       summary: 删除用户
@@ -559,7 +582,21 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FriendRequest'
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    example: 123
+                  status:
+                    type: string
+                    enum: [pending, auto_accepted]
+                    example: pending
+                  sender_public_id:
+                    type: string
+                    example: abc123XYZ
+                  receiver_public_id:
+                    type: string
+                    example: def456UVW
         '409':
           description: 已发送过请求或已是好友
 
@@ -693,8 +730,15 @@ paths:
               schema:
                 type: object
                 properties:
-                  group:
-                    $ref: '#/components/schemas/Group'
+                  group_id:
+                    type: string
+                    example: g_abc123XYZ
+                  name:
+                    type: string
+                    example: My Group
+                  owner_public_id:
+                    type: string
+                    example: abc123XYZ
 
   /api/groups/{id}:
     get:
@@ -714,10 +758,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  group:
-                    $ref: '#/components/schemas/Group'
+                $ref: '#/components/schemas/Group'
     put:
       tags: [groups]
       summary: 更新群组
@@ -741,6 +782,15 @@ paths:
       responses:
         '200':
           description: 更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  group_id:
+                    type: string
+                  name:
+                    type: string
     delete:
       tags: [groups]
       summary: 删除群组
@@ -753,7 +803,7 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        '204':
           description: 删除成功
 
   /api/groups/{id}/join:
@@ -1023,7 +1073,12 @@ paths:
                     type: string
                   file_key:
                     type: string
+                  method:
+                    type: string
+                    enum: [PUT, GET]
+                    description: 上传为PUT，下载为GET
                   expires_in:
                     type: integer
+                    description: 上传120秒，下载604800秒
         '503':
           description: S3服务未配置

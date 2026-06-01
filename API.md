@@ -81,9 +81,9 @@ POST /api/auth/register
 **参数说明**
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| username | string | 是 | 用户名，3-20字符，仅字母、数字、下划线 |
-| password | string | 是 | 密码，8-72字符，需包含大小写字母、数字、特殊字符 |
-| email | string | 否 | 邮箱地址（可选） |
+| username | string | 是 | 用户名，3-20字符，字母、数字、下划线及中日韩字符 |
+| password | string | 是 | 密码，8-128字符，需包含大小写字母、数字、特殊字符(!@#$%^&*()) |
+| email | string | 否 | 邮箱地址（可选，最大100字符） |
 
 **响应 201 Created**
 ```json
@@ -186,7 +186,8 @@ POST /api/auth/logout
 **响应 200 OK**
 ```json
 {
-  "message": "logged out successfully"
+  "success": true,
+  "message": "Logged out successfully"
 }
 ```
 
@@ -225,11 +226,9 @@ PUT /api/auth/:publicId
 **响应 200 OK**
 ```json
 {
-  "user": {
-    "username": "newusername",
-    "email": "newemail@example.com",
-    "public_id": "abc123XYZ"
-  }
+  "public_id": "abc123XYZ",
+  "username": "newusername",
+  "email": "newemail@example.com"
 }
 ```
 
@@ -307,7 +306,7 @@ POST /api/messages/send
 ```json
 {
   "message": {
-    "id": "msg_xyz789",
+    "id": "123456789",
     "conv_id": "conv_abc123",
     "sender_id": "abc123XYZ",
     "content": "Hello, how are you?",
@@ -350,7 +349,7 @@ GET /api/messages?conv_id=<conv_id>&lastMsgId=<last_msg_id>&page_size=<page_size
 {
   "messages": [
     {
-      "id": "msg_xyz789",
+      "id": "123456789",
       "conv_id": "conv_abc123",
       "sender_id": "abc123XYZ",
       "content": "Hello!",
@@ -369,7 +368,7 @@ GET /api/messages?conv_id=<conv_id>&lastMsgId=<last_msg_id>&page_size=<page_size
 {
   "messages": [
     {
-      "id": "msg_xyz789",
+      "id": "123456789",
       "conv_id": "conv_abc123",
       "sender_id": "abc123XYZ",
       "content": "Hello!",
@@ -737,23 +736,19 @@ GET /api/friends/requests
   "sent": [
     {
       "id": 123,
-      "to_user": {
-        "username": "janedoe",
-        "public_id": "def456UVW"
-      },
+      "sender_id": 456,
+      "receiver_id": 789,
       "status": "pending",
-      "created_at": "2026-05-14T12:00:00Z"
+      "ts": 1715673600000
     }
   ],
   "received": [
     {
       "id": 124,
-      "from_user": {
-        "username": "bobsmith",
-        "public_id": "ghi789RST"
-      },
+      "sender_id": 789,
+      "receiver_id": 456,
       "status": "pending",
-      "created_at": "2026-05-14T11:00:00Z"
+      "ts": 1715673600000
     }
   ]
 }
@@ -817,11 +812,7 @@ POST /api/friends/request/:requestId/accept
 **响应 200 OK**
 ```json
 {
-  "message": "friend request accepted",
-  "friend": {
-    "username": "bobsmith",
-    "public_id": "ghi789RST"
-  }
+  "message": "Friend request accepted"
 }
 ```
 
@@ -850,7 +841,7 @@ POST /api/friends/request/:requestId/reject
 **响应 200 OK**
 ```json
 {
-  "message": "friend request rejected"
+  "message": "Friend request rejected"
 }
 ```
 
@@ -966,7 +957,6 @@ POST /api/groups
 {
   "group_id": "g_abc123XYZ",
   "name": "My Group",
-  "description": "A group for friends",
   "owner_public_id": "abc123XYZ"
 }
 ```
@@ -995,7 +985,7 @@ GET /api/groups/:id
   "group_id": "g_abc123XYZ",
   "name": "My Group",
   "description": "A group for friends",
-  "owner_id": 123456,
+  "owner_id": "abc123XYZ",
   "members": [
     {
       "public_id": "abc123XYZ",
@@ -1038,11 +1028,8 @@ PUT /api/groups/:id
 **响应 200 OK**
 ```json
 {
-  "group": {
-    "id": "grp_abc123",
-    "name": "New Group Name",
-    "description": "A group for friends"
-  }
+  "group_id": "g_abc123XYZ",
+  "name": "New Group Name"
 }
 ```
 
@@ -1067,12 +1054,9 @@ DELETE /api/groups/:id
 |------|------|------|
 | id | string | 群组ID |
 
-**响应 200 OK**
-```json
-{
-  "message": "group deleted successfully"
-}
-```
+**响应 204 No Content**
+
+无响应体。
 
 **错误响应**
 - `403` - 不是群主
@@ -1237,12 +1221,23 @@ POST /api/files/presign
 | file_ext | string | 上传时必填 | 文件扩展名 |
 | file_key | string | 下载时必填 | 文件Key |
 
-**响应 200 OK**
+**上传响应 200 OK**
 ```json
 {
   "url": "https://s3.amazonaws.com/bucket/...",
-  "file_key": "files/conv_abc123/abc123.jpg",
-  "expires_in": 3600
+  "file_key": "uploads/conv_abc123/550e8400-e29b-41d4-a716-446655440000.jpg",
+  "method": "PUT",
+  "expires_in": 120
+}
+```
+
+**下载响应 200 OK**
+```json
+{
+  "url": "https://s3.amazonaws.com/bucket/...",
+  "file_key": "uploads/conv_abc123/550e8400-e29b-41d4-a716-446655440000.jpg",
+  "method": "GET",
+  "expires_in": 604800
 }
 ```
 
@@ -1369,39 +1364,27 @@ GET /metrics
 
 # 用户名
 - 长度：3-20字符
-- 允许：字母、数字、下划线
-- 正则：`^[a-zA-Z0-9_]+$`
+- 允许：字母、数字、下划线、中日韩字符（汉字、平假名、片假名、韩文）
+- 正则：`^[a-zA-Z0-9_\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]{3,20}$`
 
 # 密码
-- 长度：8-72字符
+- 长度：8-128字符
 - 必须包含：
   - 至少1个大写字母
   - 至少1个小写字母
   - 至少1个数字
-  - 至少1个特殊字符
+  - 至少1个特殊字符（!@#$%^&*()）
 
 # 邮箱
 - 标准邮箱格式
-- 最大长度：254字符
+- 最大长度：100字符
 
 # 群组名称
 - 长度：1-50字符
-- 允许：字母、数字、空格、下划线、连字符、#
+- 允许：字母、数字、空格、下划线、连字符
 
 # 消息内容
 - 最大长度：1000字符
-
----
-
-# WebSocket (未来支持)
-
-计划支持的实时通信功能：
-- 新消息推送
-- 好友在线状态
-- 正在输入提示
-- 消息已读回执
-
----
 
 # 版本历史
 
