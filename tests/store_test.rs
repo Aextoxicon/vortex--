@@ -187,10 +187,13 @@ async fn test_group_member_store_remove() {
     };
 
     group_mem_store.insert(&member).await.unwrap();
+
+    let mut tx = store.pool.begin().await.unwrap();
     group_mem_store
-        .delete_by_group_and_user("group123", user.id)
+        .delete_by_group_and_user_tx(&mut tx, "group123", user.id)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
 
     let is_member = group_mem_store
         .is_member("group123", user.id)
@@ -497,10 +500,16 @@ async fn test_message_store_get_message() {
     let from_uid: i64 = 999;
     let content = "test message content";
 
-    let msg_id = msg_store
-        .insert_message(&conv_id, from_uid, content)
-        .await
-        .unwrap();
+    let msg = store::Message {
+        msg_id: 0,
+        conv_id: conv_id.clone(),
+        from_uid,
+        content: content.to_string(),
+        ts: chrono::Utc::now().timestamp_millis(),
+        is_recalled: 0,
+    };
+
+    let msg_id = msg_store.insert_message(&msg).await.unwrap();
 
     let found = msg_store.get_message(msg_id).await.unwrap();
     assert!(found.is_some());
@@ -509,7 +518,7 @@ async fn test_message_store_get_message() {
     assert_eq!(msg.conv_id, conv_id);
     assert_eq!(msg.from_uid, from_uid);
     assert_eq!(msg.content, content);
-    assert!(!msg.is_recalled);
+    assert_eq!(msg.is_recalled, 0);
 
     let not_found = msg_store.get_message(9999999).await.unwrap();
     assert!(not_found.is_none());
