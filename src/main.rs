@@ -324,13 +324,9 @@ fn setup_routes(app_state: Arc<AppState>) -> Router<()> {
         )
         .route("/files/presign", axum::routing::post(s3::presign));
 
-    let protected_routes = protected_routes
-        .layer(axum::middleware::from_fn_with_state(
-            (*app_state).clone(),
-            jwt::auth_middleware,
-        ));
-
-    let api_routes = public_routes.merge(protected_routes);
+    let api_routes = public_routes.merge(protected_routes.layer(
+        axum::middleware::from_fn_with_state((*app_state).clone(), jwt::auth_middleware),
+    ));
 
     let app = Router::new()
         .route("/health", axum::routing::get(shared::health_check))
