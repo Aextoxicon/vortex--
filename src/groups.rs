@@ -318,7 +318,10 @@ impl Service {
 
 pub fn validate_group_name(name: &str) -> bool {
     let len = name.chars().count();
-    (1..=50).contains(&len)
+    if !(1..=50).contains(&len) {
+        return false;
+    }
+    name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ' ')
 }
 
 pub fn is_group_conv(conv_id: &str) -> bool {
