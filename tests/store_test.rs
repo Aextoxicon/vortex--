@@ -500,12 +500,13 @@ async fn test_message_store_get_message() {
     let from_uid: i64 = 999;
     let content = "test message content";
 
+    let epoch_time = 1609459200000i64;
     let msg = store::Message {
         msg_id: 0,
         conv_id: conv_id.clone(),
         from_uid,
         content: content.to_string(),
-        ts: chrono::Utc::now().timestamp_millis(),
+        ts: chrono::Utc::now().timestamp_millis() - epoch_time,
         is_recalled: 0,
     };
 
