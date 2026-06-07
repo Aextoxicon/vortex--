@@ -1,0 +1,33 @@
+# Cross-compiled Docker image
+# Uses pre-built binaries from cargo-zigbuild — no Rust toolchain needed.
+FROM debian:bookworm-slim
+
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libpq5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r vortex && useradd -r -g vortex -d /app -s /sbin/nologin vortex
+
+WORKDIR /app
+
+# Both binaries are prepared in the build context by the CI workflow
+COPY docker-bin/ /tmp/bin/
+
+# Pick the right binary for the target architecture
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      cp /tmp/bin/vortex-amd64 /app/vortex; \
+    else \
+      cp /tmp/bin/vortex-arm64 /app/vortex; \
+    fi && \
+    chmod +x /app/vortex && \
+    rm -rf /tmp/bin
+
+RUN chown -R vortex:vortex /app
+
+USER vortex
+
+EXPOSE 9178
+
+ENV RUST_LOG=info
+
+ENTRYPOINT ["/app/vortex"]

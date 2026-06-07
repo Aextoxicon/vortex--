@@ -2,6 +2,9 @@
 # Build output
 target/*
 
+# CI-generated Docker context (pre-compiled binaries)
+docker-bin/
+
 # Cargo.lock (uncomment if building a library)
 # Cargo.lock
 
