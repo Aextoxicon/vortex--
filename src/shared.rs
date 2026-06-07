@@ -295,16 +295,6 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> impl IntoR
         );
     }
 
-    if !state.svc.cfg.s3_url.is_empty() && state.svc.s3_service.is_none() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status": "not ready",
-                "reason": "S3 service unavailable",
-            })),
-        );
-    }
-
     (
         StatusCode::OK,
         Json(json!({

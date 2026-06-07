@@ -423,7 +423,7 @@ pub fn load_config() -> Config {
 
     let mut cfg = Config {
         node_id: env_int64(&dotenv_map, "NODE_ID", -1),
-        port: env_string(&dotenv_map, "PORT", ":8080"),
+        port: env_string(&dotenv_map, "PORT", ":9178"),
         database_url,
         jwt_secret,
         db_max_open_conns: env_int(&dotenv_map, "DB_MAX_OPEN_CONNS", DEFAULT_DB_MAX_OPEN_CONNS),

@@ -1,0 +1,134 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: vortex-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vortex
+      POSTGRES_PASSWORD: vortex_password
+      POSTGRES_DB: vortex
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vortex -d vortex"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vortex-network
+
+  seaweedfs-master:
+    image: chrislusf/seaweedfs:latest
+    container_name: vortex-seaweedfs-master
+    restart: unless-stopped
+    command: "master -ip=seaweedfs-master -port=9333"
+    volumes:
+      - seaweedfs_master_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9333/cluster/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vortex-network
+
+  seaweedfs-volume:
+    image: chrislusf/seaweedfs:latest
+    container_name: vortex-seaweedfs-volume
+    restart: unless-stopped
+    command: "volume -ip=seaweedfs-volume -port=9178 -mserver=seaweedfs-master:9333 -dir=/data"
+    volumes:
+      - seaweedfs_volume_data:/data
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+    networks:
+      - vortex-network
+
+  seaweedfs-filer:
+    image: chrislusf/seaweedfs:latest
+    container_name: vortex-seaweedfs-filer
+    restart: unless-stopped
+    command: "filer -ip=seaweedfs-filer -port=8888 -master=seaweedfs-master:9333"
+    volumes:
+      - seaweedfs_filer_data:/data
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+      seaweedfs-volume:
+        condition: service_started
+    networks:
+      - vortex-network
+
+  seaweedfs-s3:
+    image: chrislusf/seaweedfs:latest
+    container_name: vortex-seaweedfs-s3
+    restart: unless-stopped
+    command: "s3 -ip=seaweedfs-s3 -port=8333 -filer=seaweedfs-filer:8888"
+    depends_on:
+      seaweedfs-filer:
+        condition: service_started
+    networks:
+      - vortex-network
+
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:latest
+    container_name: vortex-seaweedfs-init
+    depends_on:
+      seaweedfs-s3:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3 &&
+      curl -X PUT http://seaweedfs-s3:8333/vortex-files || true
+      "
+    networks:
+      - vortex-network
+
+  vortex:
+    image: ghcr.io/${REPOSITORY_OWNER:-vortex--}/vortex--:latest
+    container_name: vortex-app
+    restart: unless-stopped
+    ports:
+      - "9178:9178"
+    environment:
+      NODE_ID: 0
+      PORT: :9178
+      DATABASE_URL: postgres://vortex:vortex_password@postgres:5432/vortex?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: vortex
+      JWT_EXPIRES_MINUTES: 10080
+      DB_MAX_OPEN_CONNS: 50
+      DB_MAX_IDLE_CONNS: 20
+      BCRYPT_COST: 10
+      MESSAGE_RECALL_WINDOW_MS: 120000
+      MESSAGE_RETENTION_DAYS: 7
+      EPOCH_TIME: 1767225600000
+      ID_SEGMENT_DURATION_MS: 10000
+      ID_SEGMENT_SIZE: 131072
+      DEFAULT_PAGE_SIZE: 100
+      MAX_PAGE_SIZE: 500
+      PUBLIC_ID_LENGTH: 21
+      GROUP_ID_RANDOM_LENGTH: 8
+      WORKER_TABLE_CREATE_INTERVAL_HOURS: 168
+      WORKER_MAINTENANCE_INITIAL_DELAY_MINUTES: 5
+      WORKER_MAINTENANCE_INTERVAL_HOURS: 24
+      S3_URL: s3://vortex-files?endpoint=http://seaweedfs-s3:8333&region=us-east-1&access_key=any&secret_key=any
+      IDEMPOTENCY_RETENTION_HOURS: 24
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seaweedfs-init:
+        condition: service_completed_successfully
+    networks:
+      - vortex-network
+
+volumes:
+  postgres_data:
+  seaweedfs_master_data:
+  seaweedfs_volume_data:
+  seaweedfs_filer_data:
+
+networks:
+  vortex-network:
+    driver: bridge

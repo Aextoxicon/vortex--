@@ -161,21 +161,21 @@ make test-all
 
 注册：
 ```bash
-curl -X POST http://localhost:8080/api/auth/register \
+curl -X POST http://localhost:9178/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username":"johndoe","password":"SecurePass123!","email":"john@example.com"}'
 ```
 
 登录：
 ```bash
-curl -X POST http://localhost:8080/api/auth/login \
+curl -X POST http://localhost:9178/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"johndoe","password":"SecurePass123!"}'
 ```
 
 发送消息：
 ```bash
-curl -X POST http://localhost:8080/api/messages/send \
+curl -X POST http://localhost:9178/api/messages/send \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"conv_id":"conv_abc123","content":"Hello!"}'
@@ -183,19 +183,19 @@ curl -X POST http://localhost:8080/api/messages/send \
 
 获取消息：
 ```bash
-curl -X GET "http://localhost:8080/api/messages?conv_id=conv_abc123&page=1&page_size=100" \
+curl -X GET "http://localhost:9178/api/messages?conv_id=conv_abc123&page=1&page_size=100" \
   -H "Authorization: Bearer <token>"
 ```
 
 发送好友请求：
 ```bash
-curl -X POST http://localhost:8080/api/friends/request/send/def456UVW \
+curl -X POST http://localhost:9178/api/friends/request/send/def456UVW \
   -H "Authorization: Bearer <token>"
 ```
 
 创建群组：
 ```bash
-curl -X POST http://localhost:8080/api/groups \
+curl -X POST http://localhost:9178/api/groups \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"name":"My Group","description":"A group for friends"}'

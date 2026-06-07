@@ -140,7 +140,7 @@ impl Service {
     ) -> Result<impl IntoResponse + use<>, AppError> {
         let s3_service = self.s3_service.as_ref().ok_or_else(|| {
             AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::NOT_IMPLEMENTED,
                 "S3 service not configured",
             )
         })?;
