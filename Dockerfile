@@ -1,5 +1,5 @@
-FROM rust:1.85 AS chef
-RUN cargo install cargo-chef
+FROM rust:1.86 AS chef
+RUN cargo install cargo-chef --locked
 
 FROM chef AS planner
 WORKDIR /app
