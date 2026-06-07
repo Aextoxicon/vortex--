@@ -86,7 +86,7 @@ services:
       - vortex-network
 
   vortex:
-    image: ghcr.io/${REPOSITORY_OWNER:-vortex--}/vortex--:latest
+    image: ghcr.io/${REPOSITORY_OWNER:-aextoxicon}/vortex:latest
     container_name: vortex-app
     restart: unless-stopped
     ports:

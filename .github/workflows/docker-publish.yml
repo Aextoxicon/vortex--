@@ -9,7 +9,9 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # IMAGE_NAME must not end with dashes per OCI/Docker spec;
+  # strip trailing dashes from the repo name (e.g. vortex-- -> vortex)
+  IMAGE_NAME: ${{ github.repository_owner }}/vortex
 
 jobs:
   build-and-push:
