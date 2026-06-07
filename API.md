@@ -306,7 +306,7 @@ POST /api/messages/send
 ```json
 {
   "message": {
-    "id": "123456789",
+    "id": "msg_123456789",
     "conv_id": "conv_abc123",
     "sender_id": "abc123XYZ",
     "content": "Hello, how are you?",
@@ -349,7 +349,7 @@ GET /api/messages?conv_id=<conv_id>&lastMsgId=<last_msg_id>&page_size=<page_size
 {
   "messages": [
     {
-      "id": "123456789",
+      "id": "msg_123456789",
       "conv_id": "conv_abc123",
       "sender_id": "abc123XYZ",
       "content": "Hello!",
@@ -368,7 +368,7 @@ GET /api/messages?conv_id=<conv_id>&lastMsgId=<last_msg_id>&page_size=<page_size
 {
   "messages": [
     {
-      "id": "123456789",
+      "id": "msg_123456789",
       "conv_id": "conv_abc123",
       "sender_id": "abc123XYZ",
       "content": "Hello!",
@@ -713,7 +713,7 @@ POST /api/friends/request/send/:targetPublicId
 **自动接受**: 如果对方已向你发送好友请求，会自动接受并返回`status: "auto_accepted"`
 
 **错误响应**
-- `400` - 不能向自己发送好友请求
+- `409` - 不能向自己发送好友请求
 - `404` - 目标用户不存在
 - `409` - 已发送过好友请求或已是好友
 
@@ -788,7 +788,7 @@ GET /api/friends/requests/pending
 | id | int | 好友请求ID |
 | sender_id | int | 发送者用户ID |
 | receiver_id | int | 接收者用户ID |
-| status | string | 请求状态：pending/accepted/rejected |
+| status | string | 请求状态：pending/accepted/rejected/auto_accepted |
 | ts | int | 请求创建时间戳（毫秒） |
 
 ---
@@ -863,12 +863,9 @@ DELETE /api/friends/request/:requestId
 |------|------|------|
 | requestId | int | 好友请求ID |
 
-**响应 200 OK**
-```json
-{
-  "message": "friend request cancelled"
-}
-```
+**响应 204 No Content**
+
+无响应体。
 
 **错误响应**
 - `403` - 不是好友请求的发送者
@@ -894,7 +891,7 @@ POST /api/blocks/:targetPublicId
 **响应 200 OK**
 ```json
 {
-  "message": "user blocked successfully"
+  "message": "User blocked successfully"
 }
 ```
 
@@ -919,7 +916,7 @@ DELETE /api/blocks/:targetPublicId
 **响应 200 OK**
 ```json
 {
-  "message": "user unblocked successfully"
+  "message": "User unblocked successfully"
 }
 ```
 
@@ -1082,7 +1079,7 @@ POST /api/groups/:id/join
 **响应 200 OK**
 ```json
 {
-  "message": "joined group successfully"
+  "message": "Successfully joined group"
 }
 ```
 
@@ -1111,7 +1108,7 @@ POST /api/groups/:id/leave
 **响应 200 OK**
 ```json
 {
-  "message": "left group successfully"
+  "message": "Successfully left group"
 }
 ```
 
@@ -1137,7 +1134,7 @@ DELETE /api/groups/:id/members/:memberPublicId
 **响应 200 OK**
 ```json
 {
-  "message": "member kicked successfully"
+  "message": "Member kicked successfully"
 }
 ```
 

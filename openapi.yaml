@@ -2,10 +2,10 @@ openapi: 3.0.3
 info:
   title: Vortex API
   description: Vortex 即时通讯系统 API 文档
-  version: 1.0.0
+  version: 1.2.0
   contact:
     name: API Support
-    email: support@example.com
+    email: lws20082021@outlook.com
 
 servers:
   - url: http://localhost:8080
@@ -61,7 +61,7 @@ components:
       properties:
         id:
           type: string
-          example: "123456789"
+          example: "msg_123456789"
         conv_id:
           type: string
           example: conv_abc123
@@ -472,6 +472,50 @@ paths:
                     type: integer
                     description: 仅游标模式返回
 
+  /api/messages/{msgId}:
+    get:
+      tags: [messages]
+      summary: 获取消息详情
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: msgId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg_id:
+                    type: integer
+                    example: 12345
+                  conv_id:
+                    type: string
+                    example: p_abc123_def456
+                  from_uid:
+                    type: integer
+                    example: 456
+                  content:
+                    type: string
+                    example: Hello!
+                  ts:
+                    type: integer
+                    example: 1715673600000
+                    description: 消息时间戳（毫秒）
+                  is_recalled:
+                    type: boolean
+                    example: false
+        '400':
+          description: 无效的消息ID格式
+        '404':
+          description: 消息不存在
+
   /api/messages/recall/{msgId}:
     post:
       tags: [messages]
@@ -564,6 +608,95 @@ paths:
                   total:
                     type: integer
 
+  /api/conversations/count:
+    get:
+      tags: [messages]
+      summary: 获取会话数
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id:
+                    type: integer
+                    example: 456
+                  count:
+                    type: integer
+                    example: 15
+
+  /api/conversations/{convId}/participants:
+    get:
+      tags: [messages]
+      summary: 获取会话参与者
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: convId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conv_id:
+                    type: string
+                    example: p_abc123_def456
+                  participants:
+                    type: array
+                    items:
+                      type: integer
+                    example: [123, 456]
+        '404':
+          description: 会话不存在
+
+  /api/conversations/{convId}/blocked/{userId}:
+    get:
+      tags: [messages]
+      summary: 检查屏蔽状态
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: convId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conv_id:
+                    type: string
+                    example: p_abc123_def456
+                  user_id:
+                    type: integer
+                    example: 456
+                  is_blocked:
+                    type: boolean
+                    example: false
+        '400':
+          description: 无效的用户ID格式
+
   /api/friends/request/send/{targetPublicId}:
     post:
       tags: [friends]
@@ -623,6 +756,25 @@ paths:
                     items:
                       $ref: '#/components/schemas/FriendRequest'
 
+  /api/friends/requests/pending:
+    get:
+      tags: [friends]
+      summary: 获取待处理好友请求
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FriendRequest'
+
   /api/friends/request/{requestId}/accept:
     post:
       tags: [friends]
@@ -668,7 +820,7 @@ paths:
           schema:
             type: integer
       responses:
-        '200':
+        '204':
           description: 取消成功
 
   /api/blocks/{targetPublicId}:
@@ -860,179 +1012,6 @@ paths:
           description: 踢出成功
         '403':
           description: 不是群主
-
-  /api/messages/{msgId}:
-    get:
-      tags: [messages]
-      summary: 获取消息详情
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: msgId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  msg_id:
-                    type: integer
-                  conv_id:
-                    type: string
-                  from_uid:
-                    type: integer
-                  content:
-                    type: string
-                  ts:
-                    type: integer
-                  is_recalled:
-                    type: boolean
-        '404':
-          description: 消息不存在
-
-  /api/conversations/count:
-    get:
-      tags: [messages]
-      summary: 获取用户会话数
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  user_id:
-                    type: integer
-                  count:
-                    type: integer
-
-  /api/conversations/{convId}/participants:
-    get:
-      tags: [messages]
-      summary: 获取会话参与者
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: convId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  conv_id:
-                    type: string
-                  participants:
-                    type: array
-                    items:
-                      type: integer
-        '404':
-          description: 会话不存在
-
-  /api/conversations/{convId}/blocked/{userId}:
-    get:
-      tags: [messages]
-      summary: 检查屏蔽状态
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: convId
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: userId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  conv_id:
-                    type: string
-                  user_id:
-                    type: integer
-                  is_blocked:
-                    type: boolean
-
-  /api/friends/requests/pending:
-    get:
-      tags: [friends]
-      summary: 获取待处理好友请求
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  requests:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          type: integer
-                        sender_id:
-                          type: integer
-                        receiver_id:
-                          type: integer
-                        status:
-                          type: string
-                          enum: [pending, accepted, rejected]
-                        ts:
-                          type: integer
-
-  /api/groups/{id}/members/count:
-    get:
-      tags: [groups]
-      summary: 获取群组成员数
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  group_id:
-                    type: string
-                  count:
-                    type: integer
-        '404':
-          description: 群组不存在
 
   /api/files/presign:
     post:
