@@ -81,7 +81,6 @@ pub struct ConversationItem {
     pub member_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message: Option<LastMessageInfo>,
-    pub unread_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -193,7 +192,7 @@ impl Service {
             && let Some(cmid) = client_msg_id
             && let Err(e) = self
                 .idempotency_store
-                .update_msg_id(uid, cmid, 0, conv_id)
+                .update_msg_id(uid, cmid, 0)
                 .await
         {
             tracing::warn!("idempotency cleanup failed: {}", e);
@@ -249,7 +248,7 @@ impl Service {
 
         if let Some(cmid) = client_msg_id {
             self.idempotency_store
-                .update_msg_id_tx(&mut tx, uid, cmid, msg_id, conv_id)
+                .update_msg_id_tx(&mut tx, uid, cmid, msg_id)
                 .await?;
         }
 
@@ -500,7 +499,6 @@ impl Service {
                 group_id: None,
                 member_count: None,
                 last_message: None,
-                unread_count: 0,
             };
 
             if item.r#type == "private"

@@ -534,7 +534,6 @@ GET /api/conversations
         "ts": 1715673600000,
         "is_recalled": false
       },
-      "unread_count": 0
     },
     {
       "conv_id": "g_xxx",
@@ -549,7 +548,6 @@ GET /api/conversations
         "ts": 1715673600000,
         "is_recalled": false
       },
-      "unread_count": 3
     }
   ],
   "total": 2
@@ -567,7 +565,6 @@ GET /api/conversations
 | public_id | string | 对方Public ID |
 | username | string | 对方用户名 |
 | last_message | object | 最后一条消息 |
-| unread_count | int | 未读消息数 |
 
 群组会话 (`type: "group"`)：
 | 字段 | 类型 | 说明 |
@@ -578,7 +575,6 @@ GET /api/conversations
 | group_id | string | 群组ID |
 | member_count | int | 群组成员数 |
 | last_message | object | 最后一条消息 |
-| unread_count | int | 未读消息数 |
 
 ---
 

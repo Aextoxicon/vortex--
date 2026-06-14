@@ -89,7 +89,6 @@ pub struct MessageIdempotency {
     pub user_id: i64,
     pub client_msg_id: String,
     pub msg_id: i64,
-    pub conv_id: String,
     pub created_at: i64,
 }
 
@@ -255,8 +254,8 @@ impl MessageIdempotencyStore {
             .as_millis() as i64;
 
         let query = r#"
-            INSERT INTO message_idempotency (user_id, client_msg_id, msg_id, conv_id, created_at)
-            VALUES ($1, $2, 0, '', $3)
+            INSERT INTO message_idempotency (user_id, client_msg_id, msg_id, created_at)
+            VALUES ($1, $2, 0, $3)
             ON CONFLICT (user_id, client_msg_id) DO UPDATE SET user_id = EXCLUDED.user_id
             RETURNING msg_id"#;
         let existing_id: i64 = sqlx::query_scalar(query)
@@ -278,15 +277,13 @@ impl MessageIdempotencyStore {
         user_id: i64,
         client_msg_id: &str,
         msg_id: i64,
-        conv_id: &str,
     ) -> Result<(), sqlx::Error> {
         let query = r#"
             UPDATE message_idempotency 
-            SET msg_id = $1, conv_id = $2 
-            WHERE user_id = $3 AND client_msg_id = $4"#;
+            SET msg_id = $1 
+            WHERE user_id = $2 AND client_msg_id = $3"#;
         sqlx::query(query)
             .bind(msg_id)
-            .bind(conv_id)
             .bind(user_id)
             .bind(client_msg_id)
             .execute(&self.store.pool)
@@ -300,15 +297,13 @@ impl MessageIdempotencyStore {
         user_id: i64,
         client_msg_id: &str,
         msg_id: i64,
-        conv_id: &str,
     ) -> Result<(), sqlx::Error> {
         let query = r#"
             UPDATE message_idempotency 
-            SET msg_id = $1, conv_id = $2 
-            WHERE user_id = $3 AND client_msg_id = $4"#;
+            SET msg_id = $1 
+            WHERE user_id = $2 AND client_msg_id = $3"#;
         sqlx::query(query)
             .bind(msg_id)
-            .bind(conv_id)
             .bind(user_id)
             .bind(client_msg_id)
             .execute(&mut **tx)

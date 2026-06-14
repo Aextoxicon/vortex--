@@ -177,7 +177,6 @@ async fn create_message_idempotency_table(pool: &PgPool) -> Result<(), sqlx::Err
             user_id BIGINT NOT NULL,
             client_msg_id TEXT NOT NULL,
             msg_id BIGINT NOT NULL DEFAULT 0,
-            conv_id TEXT NOT NULL DEFAULT '',
             created_at BIGINT NOT NULL,
             UNIQUE (user_id, client_msg_id)
         )

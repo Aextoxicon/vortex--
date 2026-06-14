@@ -1,0 +1,8 @@
+target/
+
+output*.txt
+*.tmp
+*.log
+
+.env
+.env

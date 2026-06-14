@@ -603,8 +603,6 @@ paths:
                           type: string
                         name:
                           type: string
-                        unread_count:
-                          type: integer
                   total:
                     type: integer
 
