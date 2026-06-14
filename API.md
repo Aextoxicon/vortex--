@@ -442,7 +442,7 @@ POST /api/messages/recall/:msgId
 **路径参数**
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| msgId | string | 消息ID |
+| msgId | int | 消息ID |
 
 **响应 200 OK**
 ```json

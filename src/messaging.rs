@@ -694,11 +694,8 @@ pub async fn get_messages(
 pub async fn recall_message(
     State(state): State<crate::AppState>,
     axum::extract::Extension(user_id): axum::extract::Extension<i64>,
-    axum::extract::Path(msg_id): axum::extract::Path<String>,
+    axum::extract::Path(msg_id): axum::extract::Path<i64>,
 ) -> Result<impl IntoResponse + use<>, AppError> {
-    let msg_id: i64 = msg_id
-        .parse()
-        .map_err(|_| AppError::bad_request("invalid message ID"))?;
     state.svc.recall_message(msg_id, user_id).await?;
 
     Ok(Json(json!({
@@ -786,11 +783,8 @@ pub struct GetMessageResponse {
 
 pub async fn get_message(
     State(state): State<crate::AppState>,
-    axum::extract::Path(msg_id): axum::extract::Path<String>,
+    axum::extract::Path(msg_id): axum::extract::Path<i64>,
 ) -> Result<impl IntoResponse + use<>, AppError> {
-    let msg_id: i64 = msg_id
-        .parse()
-        .map_err(|_| AppError::bad_request("invalid msg_id"))?;
 
     let msg = state
         .svc

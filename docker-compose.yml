@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: vortex
-      POSTGRES_PASSWORD: vortex_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vortex_password}
       POSTGRES_DB: vortex
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -94,7 +94,7 @@ services:
     environment:
       NODE_ID: 0
       PORT: :9178
-      DATABASE_URL: postgres://vortex:vortex_password@postgres:5432/vortex?sslmode=disable
+      DATABASE_URL: postgres://vortex:${POSTGRES_PASSWORD:-vortex_password}@postgres:5432/vortex?sslmode=disable
       JWT_SECRET: ${JWT_SECRET}
       JWT_ISSUER: vortex
       JWT_EXPIRES_MINUTES: 10080
