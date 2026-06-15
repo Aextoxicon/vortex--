@@ -8,9 +8,9 @@ export function randomString(len = 8) {
   return result;
 }
 
-// 生成唯一用户名
+// 生成唯一用户名（3-20字符，符合服务端校验规则）
 export function uniqueUsername(prefix = 'test') {
-  return ${prefix}___;
+  return `${prefix}_${randomString(8)}`;
 }
 
 // 生成随机消息内容
@@ -31,5 +31,5 @@ export function randomMessage() {
 // 生成私聊会话 ID (public_id 按字母序排列)
 export function privateConvId(pid1, pid2) {
   const parts = [pid1, pid2].sort();
-  return p__;
+  return `p_${parts[0]}_${parts[1]}`;
 }
