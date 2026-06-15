@@ -1,6 +1,6 @@
 # Vortex
 
-即使是仓库名字是vortex--，因为以前rust版本仓库叫vortex给我占用了
+AI写代码太好用了xdm
 
 # 项目结构
 
