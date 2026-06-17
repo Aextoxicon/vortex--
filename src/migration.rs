@@ -12,6 +12,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     create_jwt_blacklist_table(pool).await?;
     add_is_blocked_column(pool).await?;
     add_epoch_time_column(pool).await?;
+    drop_email_unique_constraint(pool).await?;
 
     tracing::info!("migrations completed successfully");
     Ok(())
@@ -24,7 +25,7 @@ async fn create_users_table(pool: &PgPool) -> Result<(), sqlx::Error> {
             id BIGSERIAL PRIMARY KEY,
             username TEXT NOT NULL,
             pwd_hash TEXT NOT NULL,
-            email TEXT UNIQUE,
+            email TEXT,
             public_id TEXT NOT NULL UNIQUE,
             created_at BIGINT NOT NULL,
             updated_at BIGINT NOT NULL
@@ -264,5 +265,12 @@ async fn add_epoch_time_column(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    Ok(())
+}
+
+async fn drop_email_unique_constraint(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(r#"ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key"#)
+        .execute(pool)
+        .await?;
     Ok(())
 }
