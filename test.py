@@ -10,7 +10,7 @@ import time
 from typing import Dict, List, Optional
 
 # 配置
-BASE_URL = "http://localhost:9178"
+BASE_URL = "http://localhost:8080"
 PASSWORD = "Test123!"  # 符合密码要求：大小写字母、数字、特殊字符
 
 # 测试用户数据
@@ -48,12 +48,12 @@ class VortexTester:
             response = requests.post(url, json=data)
             if response.status_code == 201:
                 result = response.json()
-                user = result["user"]
-                print(f"✅ 成功注册用户：{username} (public_id: {user['public_id']})")
+                print(f"✅ 成功注册用户：{username} (public_id: {result['public_id']})")
+                # 注册不返回 token，需要单独登录
                 return {
-                    "public_id": user["public_id"],
-                    "username": user["username"],
-                    "email": user["email"]
+                    "public_id": result["public_id"],
+                    "username": result["username"],
+                    "email": result["email"]
                 }
             else:
                 print(f"❌ 注册用户 {username} 失败：{response.status_code} - {response.text}")
@@ -146,7 +146,7 @@ class VortexTester:
                 response = requests.post(url, json=data, headers=headers)
                 if response.status_code == 201:
                     result = response.json()
-                    msg_id = result.get('message', {}).get('id')
+                    msg_id = result.get('msg_id')
                     print(f"✅ 发送消息成功 (msg_id: {msg_id})")
                     return result
                 elif response.status_code == 500 and attempt < retry - 1:
@@ -391,6 +391,9 @@ class VortexTester:
         )
         if group:
             group_id = group.get('id')
+            # 创建者也加入群组（虽然后端会自动添加，但显式调用确保成员关系生效）
+            time.sleep(0.5)
+            self.join_group(self.tokens[self.users[0]["username"]], group_id)
             # 其他用户加入群组
             time.sleep(0.5)
             self.join_group(self.tokens[self.users[1]["username"]], group_id)

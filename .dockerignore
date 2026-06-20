@@ -1,7 +1,10 @@
-target/
 .git/
 .env
 .env.docker
 .env.example
 *.md
 *.json
+*.exe
+*.test
+unit-coverage.txt
+integration-coverage.txt

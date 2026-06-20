@@ -1,68 +1,200 @@
-name: Build, Docker & Release
+name: Release
 
 on:
   push:
     branches: [main, master]
-    tags:
-      - 'v*'
   pull_request:
     branches: [main, master]
-  workflow_dispatch:
 
 env:
-  CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/vortex
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-release:
-    name: Build and Release
+  release:
+    name: Build & Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.version.outputs.should_release }}
+
+    steps:
+      - name: Checkout code (full history)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.1'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      # ── 自动计算版本号 ──────────────────────────────────
+      - name: Determine version
+        id: version
+        run: |
+          # 获取最新 tag（没有则默认 v0.0.0）
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: $LATEST_TAG"
+
+          # 获取自从上次 tag 以来的所有 commit message
+          if git rev-parse "$LATEST_TAG" >/dev/null 2>&1; then
+            COMMITS=$(git log "$LATEST_TAG"..HEAD --format="%s" 2>/dev/null || echo "")
+          else
+            COMMITS=$(git log --format="%s")
+          fi
+
+          # 没有新 commit，跳过发布
+          if [ -z "$COMMITS" ]; then
+            echo "No new commits since last tag, skipping release"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # 解析 semver
+          VERSION=${LATEST_TAG#v}
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          # 默认 patch 递增
+          BUMP="patch"
+
+          # 逐条检查 commit 开头的单词
+          # mod 开头 → minor; fix 开头 → patch; 其他 → 默认 patch
+          while IFS= read -r msg; do
+            FIRST_WORD=$(echo "$msg" | sed 's/^[[:space:]]*//' | sed 's/:.*//' | head -c 10)
+            case "$FIRST_WORD" in
+              mod|mod:*)
+                BUMP="minor"
+                ;;
+              fix|fix:*)
+                [ "$BUMP" != "minor" ] && BUMP="patch"
+                ;;
+            esac
+          done <<< "$COMMITS"
+
+          # 应用递增
+          case $BUMP in
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              # minor 满 10 向 major 进一位
+              if [ "$MINOR" -ge 10 ]; then
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+              fi
+              ;;
+            patch)
+              # patch 无上限，自由增长
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "Bump type: $BUMP"
+          echo "New version: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "should_release=true" >> $GITHUB_OUTPUT
+
+      # ── 交叉编译 ──────────────────────────────────────
+      - name: Cross-compile binaries
+        if: steps.version.outputs.should_release == 'true'
+        run: |
+          COMMIT=$(git rev-parse --short HEAD)
+          for arch in amd64 arm64; do
+            echo "Building linux/$arch ..."
+            GOOS=linux GOARCH=$arch CGO_ENABLED=0 \
+            go build -v \
+              -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }} -X main.Commit=$COMMIT" \
+              -o vortex-$arch .
+          done
+          echo "All binaries built with version ${{ steps.version.outputs.version }}"
+
+      - name: Check binary version
+        if: steps.version.outputs.should_release == 'true'
+        run: |
+          chmod +x vortex-*
+          ./vortex-amd64 --version
+          ./vortex-arm64 --version
+
+      - name: Upload binary artifacts
+        if: steps.version.outputs.should_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vortex-binaries-${{ steps.version.outputs.version }}
+          path: vortex-*
+          retention-days: 7
+
+      # ── 创建 Git Tag ──────────────────────────────────
+      - name: Create and push Git tag
+        if: >
+          steps.version.outputs.should_release == 'true' &&
+          github.event_name != 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.version.outputs.version }}
+          git push origin ${{ steps.version.outputs.version }}
+          echo "Tag ${{ steps.version.outputs.version }} created and pushed"
+
+      # ── 创建 GitHub Release ──────────────────────────
+      - name: Create GitHub Release
+        if: >
+          steps.version.outputs.should_release == 'true' &&
+          github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          files: |
+            vortex-amd64
+            vortex-arm64
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Docker build & push
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: >
+      needs.release.outputs.should_release == 'true' &&
+      github.event_name != 'pull_request'
+
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
+          name: vortex-binaries-${{ needs.release.outputs.version }}
+          path: docker-bin
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+      - name: Make binaries executable
+        run: chmod +x docker-bin/*
 
-      - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.13.0
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
-
-      - name: Build x86_64
-        run: cargo zigbuild --release --target x86_64-unknown-linux-gnu
-
-      - name: Build aarch64
-        run: cargo zigbuild --release --target aarch64-unknown-linux-gnu
-
-      - name: Extract version
-        id: extract_version
-        run: |
-          VERSION=$(grep -E '^version' Cargo.toml | head -n 1 | sed 's/.*= *"\(.*\)".*/\1/')
-          if [ -z "$VERSION" ] || ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Error: Invalid version format extracted: '$VERSION'"
-            exit 1
-          fi
-          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Extracted version: $VERSION"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -74,73 +206,18 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          flavor: |
-            latest=true
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=branch
-            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest,enable={{ is_default_branch }}
 
-      - name: Prepare Docker context
-        run: |
-          mkdir -p docker-bin
-          cp target/x86_64-unknown-linux-gnu/release/vortex-- docker-bin/vortex-amd64
-          cp target/aarch64-unknown-linux-gnu/release/vortex-- docker-bin/vortex-arm64
-
-      - name: Build and push multi-arch Docker image
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.cross
-          push: ${{ github.event_name != 'pull_request' }}
           platforms: linux/amd64,linux/arm64
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Package release binaries
-        run: |
-          mkdir -p release-assets
-          cp target/x86_64-unknown-linux-gnu/release/vortex-- release-assets/vortex--x86_64-unknown-linux-gnu
-          cp target/aarch64-unknown-linux-gnu/release/vortex-- release-assets/vortex--aarch64-unknown-linux-gnu
-
-      - name: Check if release already exists
-        id: check_release
-        run: |
-          if gh release view "v${{ env.APP_VERSION }}" >/dev/null 2>&1; then
-            echo "Release v${{ env.APP_VERSION }} already exists"
-            echo "RELEASE_EXISTS=true" >> $GITHUB_ENV
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "Release v${{ env.APP_VERSION }} does not exist"
-            echo "RELEASE_EXISTS=false" >> $GITHUB_ENV
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create tag and release
-        if: ${{ steps.check_release.outputs.exists == 'false' && github.event_name != 'pull_request' }}
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          if git rev-parse "v${{ env.APP_VERSION }}" >/dev/null 2>&1; then
-            echo "Tag v${{ env.APP_VERSION }} already exists locally"
-          else
-            git tag -a "v${{ env.APP_VERSION }}" -m "Release v${{ env.APP_VERSION }}"
-          fi
-          git push origin "v${{ env.APP_VERSION }}"
-
-          gh release create "v${{ env.APP_VERSION }}" \
-            --title "Release v${{ env.APP_VERSION }}" \
-            --notes "Automated release by GitHub Actions" \
-            release-assets/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload to existing release
-        if: ${{ steps.check_release.outputs.exists == 'true' && github.event_name != 'pull_request' }}
-        run: |
-          gh release upload "v${{ env.APP_VERSION }}" release-assets/* --clobber
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

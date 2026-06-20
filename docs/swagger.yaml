@@ -1,0 +1,1119 @@
+definitions:
+  main.ConversationItem:
+    properties:
+      conv_id:
+        type: string
+      group_id:
+        type: string
+      last_message:
+        $ref: '#/definitions/main.LastMessageInfo'
+      member_count:
+        type: integer
+      name:
+        type: string
+      public_id:
+        type: string
+      type:
+        type: string
+      unread_count:
+        type: integer
+      username:
+        type: string
+    type: object
+  main.ConversationListResponse:
+    properties:
+      conversations:
+        items:
+          $ref: '#/definitions/main.ConversationItem'
+        type: array
+      total:
+        type: integer
+    type: object
+  main.CreateGroupRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+    required:
+    - name
+    type: object
+  main.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  main.LastMessageInfo:
+    properties:
+      content:
+        type: string
+      from_uid:
+        type: integer
+      is_recalled:
+        type: boolean
+      msg_id:
+        type: integer
+      ts:
+        type: integer
+    type: object
+  main.LoginRequest:
+    properties:
+      password:
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  main.PresignRequest:
+    properties:
+      conv_id:
+        type: string
+      file_ext:
+        type: string
+      file_key:
+        type: string
+      operation:
+        enum:
+        - upload
+        - download
+        type: string
+    required:
+    - operation
+    type: object
+  main.RegisterRequest:
+    properties:
+      bio:
+        type: string
+      email:
+        type: string
+      password:
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  main.SendMessageRequest:
+    properties:
+      client_msg_id:
+        type: string
+      content:
+        maxLength: 1000
+        type: string
+      content_type:
+        type: string
+      conv_id:
+        type: string
+      text:
+        maxLength: 1000
+        type: string
+    required:
+    - content
+    - conv_id
+    type: object
+  main.SuccessResponse:
+    properties:
+      message:
+        type: string
+      success:
+        type: boolean
+    type: object
+  main.UpdateGroupRequest:
+    properties:
+      name:
+        type: string
+    type: object
+  main.UpdateUserRequest:
+    properties:
+      bio:
+        type: string
+      email:
+        type: string
+      username:
+        type: string
+    type: object
+info:
+  contact: {}
+paths:
+  /api/auth/{publicId}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除当前登录用户的账号及相关数据，但是聊天记录我打算是随着自动清理清理掉，主要数据还是在客户端懒得管
+      parameters:
+      - description: 用户公开ID
+        in: path
+        name: publicId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "403":
+          description: 无权限
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 删除用户
+      tags:
+      - auth
+    put:
+      consumes:
+      - application/json
+      description: 更新当前登录用户的用户名、邮箱或个人简介
+      parameters:
+      - description: 用户公开ID
+        in: path
+        name: publicId
+        required: true
+        type: string
+      - description: 更新信息
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.UpdateUserRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数无效
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "403":
+          description: 无权限
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 更新用户信息
+      tags:
+      - auth
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: 使用用户名和密码登录，返回 JWT Token
+      parameters:
+      - description: 登录信息
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 登录成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数无效
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "401":
+          description: 用户名或密码错误
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "429":
+          description: 登录失败次数过多
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      summary: 用户登录，一样东西很少
+      tags:
+      - auth
+  /api/auth/logout:
+    post:
+      consumes:
+      - application/json
+      description: 将当前 JWT Token 加入黑名单，实现登出
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 登出成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 用户登出
+      tags:
+      - auth
+  /api/auth/me:
+    get:
+      consumes:
+      - application/json
+      description: 获取当前登录用户的详细信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 获取当前用户信息
+      tags:
+      - auth
+  /api/auth/register:
+    post:
+      consumes:
+      - application/json
+      description: 使用用户名和密码创建新账号，目前暂时没打算折腾头像
+      parameters:
+      - description: 注册信息
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 注册成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数无效
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "409":
+          description: 用户名或邮箱已存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      summary: 用户注册
+      tags:
+      - auth
+  /api/blocks/{targetPublicId}:
+    delete:
+      consumes:
+      - application/json
+      description: 取消屏蔽指定用户
+      parameters:
+      - description: 目标用户公钥ID
+        in: path
+        name: targetPublicId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 取消屏蔽成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "404":
+          description: 用户不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 取消屏蔽用户
+      tags:
+      - blocks
+    post:
+      consumes:
+      - application/json
+      description: 屏蔽指定用户
+      parameters:
+      - description: 目标用户公钥ID
+        in: path
+        name: targetPublicId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 屏蔽成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "404":
+          description: 用户不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 屏蔽用户
+      tags:
+      - blocks
+  /api/check:
+    get:
+      consumes:
+      - application/json
+      description: 检查用户是否有新消息
+      parameters:
+      - description: 最后消息ID
+        in: query
+        name: lastMsgId
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 检查结果
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - bearerAuth: []
+      summary: 检查新消息
+      tags:
+      - messages
+  /api/conversations:
+    get:
+      consumes:
+      - application/json
+      description: 获取用户的所有会话列表
+      parameters:
+      - description: 每页条数
+        in: query
+        name: limit
+        type: integer
+      - description: 偏移量
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 会话列表
+          schema:
+            $ref: '#/definitions/main.ConversationListResponse'
+      security:
+      - bearerAuth: []
+      summary: 获取会话列表
+      tags:
+      - conversations
+  /api/conversations/{convId}/blocked/{userId}:
+    get:
+      consumes:
+      - application/json
+      description: 检查指定用户在会话中是否被屏蔽
+      parameters:
+      - description: 会话ID
+        in: path
+        name: convId
+        required: true
+        type: string
+      - description: 用户ID
+        in: path
+        name: userId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 屏蔽状态
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - bearerAuth: []
+      summary: 检查是否被屏蔽
+      tags:
+      - conversations
+  /api/conversations/{convId}/participants:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定会话的参与者列表
+      parameters:
+      - description: 会话ID
+        in: path
+        name: convId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 参与者列表
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - bearerAuth: []
+      summary: 获取会话参与者
+      tags:
+      - conversations
+  /api/conversations/count:
+    get:
+      consumes:
+      - application/json
+      description: 获取用户会话总数
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 会话数量
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - bearerAuth: []
+      summary: 获取会话数量
+      tags:
+      - conversations
+  /api/files/presign:
+    post:
+      consumes:
+      - application/json
+      description: 获取文件上传或下载的预签名 URL
+      parameters:
+      - description: 预签名请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.PresignRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 预签名 URL
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求无效
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "501":
+          description: S3 服务未配置
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 获取文件预签名 URL
+      tags:
+      - files
+  /api/friends/request/{requestId}:
+    delete:
+      consumes:
+      - application/json
+      description: 取消自己发送的好友请求
+      parameters:
+      - description: 请求 ID
+        in: path
+        name: requestId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: 取消成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求无效
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "404":
+          description: 请求不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 取消好友请求
+      tags:
+      - friends
+  /api/friends/request/{requestId}/accept:
+    post:
+      consumes:
+      - application/json
+      description: 接受指定的好友请求
+      parameters:
+      - description: 请求 ID
+        in: path
+        name: requestId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 接受成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "400":
+          description: 请求无效
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "403":
+          description: 无权限
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "404":
+          description: 请求不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 接受好友请求
+      tags:
+      - friends
+  /api/friends/request/{requestId}/reject:
+    post:
+      consumes:
+      - application/json
+      description: 拒绝指定的好友请求
+      parameters:
+      - description: 请求 ID
+        in: path
+        name: requestId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 拒绝成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "400":
+          description: 请求无效
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "404":
+          description: 请求不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 拒绝好友请求
+      tags:
+      - friends
+  /api/friends/request/send/{targetPublicId}:
+    post:
+      consumes:
+      - application/json
+      description: 向指定用户发送好友请求
+      parameters:
+      - description: 目标用户公钥 ID
+        in: path
+        name: targetPublicId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 请求发送成功
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 用户不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "409":
+          description: 请求冲突
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 发送好友请求
+      tags:
+      - friends
+  /api/friends/requests:
+    get:
+      consumes:
+      - application/json
+      description: 获取当前用户发送和收到的所有好友请求
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 请求列表
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - bearerAuth: []
+      summary: 获取好友请求列表
+      tags:
+      - friends
+  /api/friends/requests/pending:
+    get:
+      consumes:
+      - application/json
+      description: 获取当前用户收到但尚未处理的好友请求列表
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 待处理请求列表
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - bearerAuth: []
+      summary: 获取待处理的好友请求
+      tags:
+      - friends
+  /api/groups:
+    post:
+      consumes:
+      - application/json
+      description: 创建一个新的群组，创建者自动成为群主
+      parameters:
+      - description: 创建群组请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.CreateGroupRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 创建成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 输入错误
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 创建群组
+      tags:
+      - groups
+  /api/groups/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定群组（仅群主可操作）
+      parameters:
+      - description: 群组 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: 删除成功
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: 无权限，仅群主可操作
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "404":
+          description: 群组不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 删除群组
+      tags:
+      - groups
+    get:
+      consumes:
+      - application/json
+      description: 根据群组 ID 或群名获取群组信息和成员列表
+      parameters:
+      - description: 群组 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 群组详情
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 群组不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 获取群组详情
+      tags:
+      - groups
+    put:
+      consumes:
+      - application/json
+      description: 更新指定群组的名称等信息（仅群主可操作）
+      parameters:
+      - description: 群组 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 更新群组请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.UpdateGroupRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 输入错误
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "403":
+          description: 无权限，仅群主可操作
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "404":
+          description: 群组不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 更新群组
+      tags:
+      - groups
+  /api/groups/{id}/join:
+    post:
+      consumes:
+      - application/json
+      description: 当前用户加入指定群组
+      parameters:
+      - description: 群组 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 加入成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "404":
+          description: 群组不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 加入群组
+      tags:
+      - groups
+  /api/groups/{id}/leave:
+    post:
+      consumes:
+      - application/json
+      description: 当前用户退出指定群组（群主不可退出）
+      parameters:
+      - description: 群组 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 退出成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "404":
+          description: 群组不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 退出群组
+      tags:
+      - groups
+  /api/groups/{id}/members/{memberPublicId}:
+    delete:
+      consumes:
+      - application/json
+      description: 群主将指定成员踢出群组
+      parameters:
+      - description: 群组 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 成员公钥 ID
+        in: path
+        name: memberPublicId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 踢出成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "403":
+          description: 无权限
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "404":
+          description: 群组或成员不存在
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 踢出群成员
+      tags:
+      - groups
+  /api/groups/{id}/members/count:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定群组的成员数量
+      parameters:
+      - description: 群组 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成员数量
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - bearerAuth: []
+      summary: 获取群组成员数量
+      tags:
+      - groups
+  /api/messages:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定会话的消息列表，支持分页和游标
+      parameters:
+      - description: 会话ID
+        in: query
+        name: conv_id
+        required: true
+        type: string
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页条数
+        in: query
+        name: page_size
+        type: integer
+      - description: 游标消息ID
+        in: query
+        name: lastMsgId
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 消息列表
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求错误
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 获取消息列表
+      tags:
+      - messages
+  /api/messages/{msgId}:
+    get:
+      consumes:
+      - application/json
+      description: 根据消息ID获取消息的详细信息
+      parameters:
+      - description: 消息ID
+        in: path
+        name: msgId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 消息详情
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求错误
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 获取消息详情
+      tags:
+      - messages
+  /api/messages/recall/{msgId}:
+    post:
+      consumes:
+      - application/json
+      description: 撤回指定消息
+      parameters:
+      - description: 消息ID
+        in: path
+        name: msgId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 撤回成功
+          schema:
+            $ref: '#/definitions/main.SuccessResponse'
+        "400":
+          description: 请求错误
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "403":
+          description: 无权操作
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 撤回消息
+      tags:
+      - messages
+  /api/messages/send:
+    post:
+      consumes:
+      - application/json
+      description: 发送一条消息到指定会话
+      parameters:
+      - description: 消息请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.SendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 消息发送成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求错误
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "429":
+          description: 请求频率限制
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - bearerAuth: []
+      summary: 发送消息
+      tags:
+      - messages
+  /health:
+    get:
+      description: 返回服务运行状态
+      responses:
+        "200":
+          description: 服务正常
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 健康检查
+      tags:
+      - health
+  /metrics:
+    get:
+      description: 获取服务的运行指标，包括进程信息、内存使用、线程数等
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 服务指标
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取服务指标
+      tags:
+      - metrics
+  /ready:
+    get:
+      description: 检查服务是否就绪（数据库连接是否正常）
+      responses:
+        "200":
+          description: 服务就绪
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: 服务未就绪
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      summary: 就绪检查
+      tags:
+      - health
+swagger: "2.0"

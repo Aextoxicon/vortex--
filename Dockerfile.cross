@@ -1,12 +1,11 @@
 # Cross-compiled Docker image
-# Uses pre-built binaries from cargo-zigbuild — no Rust toolchain needed.
-FROM debian:bookworm-slim
+# Uses pre-built binaries from GitHub Actions — no Go toolchain needed.
+FROM alpine:3.21
 
 ARG TARGETARCH
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libpq5 \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r vortex && useradd -r -g vortex -d /app -s /sbin/nologin vortex
+RUN apk add --no-cache ca-certificates libpq \
+    && addgroup -S vortex && adduser -S vortex -G vortex
 
 WORKDIR /app
 
@@ -27,7 +26,5 @@ RUN chown -R vortex:vortex /app
 USER vortex
 
 EXPOSE 9178
-
-ENV RUST_LOG=info
 
 ENTRYPOINT ["/app/vortex"]
