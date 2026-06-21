@@ -21,3 +21,5 @@ vortex
 vortex-*
 coverage/
 docker-bin/
+.DS_Store
+unit-coverage.txt
