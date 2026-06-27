@@ -16,14 +16,14 @@ import (
 // NewIdGenerator函数创建一个新的ID生成器实例，Init方法初始化生成器，GenerateID方法生成一个新的ID，其他方法用于管理ID段和提取ID信息等功能
 const (
 	vfTimestampBits = 41 // 约69年
-	vfNodeIDBits    = 5 // 支持最多32个节点
+	vfNodeIDBits    = 5  // 支持最多32个节点
 	vfSequenceBits  = 17 // 支持每个节点最多131072个序列号(以后小概率可能会压缩这个序列号然后腾出一个regionID之类的东西，但是目前没有打算提前优化)
 
 	vfMaxTimestamp = (1 << vfTimestampBits) - 1 // 为什么-1？因为ID是从0开始的，所以最大值是2的位数次方减1，而不是2的位数次方
-	vfMaxNodeID    = (1 << vfNodeIDBits) - 1 // 如果不-1，那么最大节点ID就是32，但实际上节点ID是从0开始的，所以最大节点ID应该是31
-	vfMaxSequence  = (1 << vfSequenceBits) - 1 // 同理，如果不-1，那么最大序列号就是131072，但实际上序列号是从0开始的，所以最大序列号应该是131071
+	vfMaxNodeID    = (1 << vfNodeIDBits) - 1    // 如果不-1，那么最大节点ID就是32，但实际上节点ID是从0开始的，所以最大节点ID应该是31
+	vfMaxSequence  = (1 << vfSequenceBits) - 1  // 同理，如果不-1，那么最大序列号就是131072，但实际上序列号是从0开始的，所以最大序列号应该是131071
 
-	vfNodeIDShift    = vfSequenceBits // 节点ID在ID中的位移位置，序列号占17位，所以节点ID需要左移17位
+	vfNodeIDShift    = vfSequenceBits                // 节点ID在ID中的位移位置，序列号占17位，所以节点ID需要左移17位
 	vfTimestampShift = vfSequenceBits + vfNodeIDBits // 时间戳在ID中的位移位置，序列号占17位，节点ID占5位，所以时间戳需要左移22位
 )
 
@@ -229,7 +229,7 @@ func (g *IdGenerator) fetchNewSegmentLocked(ctx context.Context) error { // 假�
 
 	endTs := startTs + g.cfg.SegmentDurationMs
 
-	startID := (startTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift) // 序列号从0开始
+	startID := (startTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift)             // 序列号从0开始
 	endID := (endTs << vfTimestampShift) | (g.nodeID << vfNodeIDShift) | vfMaxSequence // 时间戳部分是endTs，节点ID部分是g.nodeID，序列号部分是全1，这样就表示这个段的最后一个ID
 
 	// 如果数据库中已经有状态了，那么就以状态中的LastTs为基础生成新的段，新的段的起始时间戳就是LastTs+1，这样就保证了新段的ID不会和旧段的ID重叠

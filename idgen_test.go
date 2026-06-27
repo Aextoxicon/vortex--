@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 )
+
 // 和上面的handler测试一样，这个东西主要是测试ID生成器的功能，确保它能正确生成唯一且递增的ID，并且能够正确提取时间戳、节点ID和序列号等信息
 func TestIDGenerator_GenerateID(t *testing.T) {
 	store, _, _ := setupTestStore(t)

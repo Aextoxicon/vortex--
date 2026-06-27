@@ -51,5 +51,3 @@ func TestExtractFileKeyFromMessage(t *testing.T) {
 		})
 	}
 }
-
-

@@ -191,9 +191,9 @@ func NewService(
 
 // 通知子类型常量
 const (
-	NotifFriendRequest        = "friend_request"
-	NotifFriendRequestSent    = "friend_request_sent"
-	NotifGroupInvite          = "group_invite"
+	NotifFriendRequest     = "friend_request"
+	NotifFriendRequestSent = "friend_request_sent"
+	NotifGroupInvite       = "group_invite"
 )
 
 type NotificationPayload struct {
@@ -262,5 +262,3 @@ func (s *Service) sendSystemMessageTx(ctx context.Context, tx *sql.Tx, convID st
 
 	return msg.MsgID, nil
 }
-
-

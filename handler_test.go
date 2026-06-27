@@ -1192,4 +1192,3 @@ func TestHandler_Metrics(t *testing.T) {
 		t.Error("expected threads in response")
 	}
 }
-

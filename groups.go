@@ -526,7 +526,7 @@ func (s *Service) GetGroupMemberCount(ctx context.Context, groupID string) (int,
 var seededRand = rand.New(&lockedSource{src: rand.NewSource(time.Now().UnixNano())})
 
 type lockedSource struct {
-	mu sync.Mutex
+	mu  sync.Mutex
 	src rand.Source
 }
 
