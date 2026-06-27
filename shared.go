@@ -132,6 +132,33 @@ func checkFound[T any](item *T, err error) (*T, error) {
 	return item, nil
 }
 
+// withTx 泛型事务辅助：自动处理 BeginTx → defer Rollback → Commit → 置 nil
+// 注意：不要在 fn 内部直接使用 defer 做资源清理，如有需要请使用更细粒度的控制
+func withTx[T any](db *sql.DB, ctx context.Context, opts *sql.TxOptions, fn func(*sql.Tx) (T, error)) (T, error) {
+	tx, err := db.BeginTx(ctx, opts)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	result, err := fn(tx)
+	if err != nil {
+		return result, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		var zero T
+		return zero, err
+	}
+	tx = nil
+	return result, nil
+}
+
 func NewService(
 	cfg *Config,
 	userStore *UserStore,
@@ -177,7 +204,23 @@ type NotificationPayload struct {
 
 type NotifData map[string]interface{}
 
-// SendNotificationToUser 核心通知发送方法
+// buildSystemMessage 构建系统消息（FromUID=0），避免两处重复
+func (s *Service) buildSystemMessage(ctx context.Context, convID string, content []byte) (*Message, error) {
+	msgID, err := s.idGen.GenerateID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ts := time.Now().UnixMilli() - s.idGen.GetEpochTime()
+	return &Message{
+		MsgID:   msgID,
+		ConvID:  convID,
+		FromUID: 0,
+		Content: string(content),
+		Ts:      ts,
+	}, nil
+}
+
+// SendNotificationToUser 核心通知发送方法（无事务）
 func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifType string, data NotifData) (int64, error) {
 	convID := fmt.Sprintf("system_%d", uid)
 
@@ -192,19 +235,9 @@ func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifTy
 		return 0, fmt.Errorf("notification marshal failed: %w", err)
 	}
 
-	msgID, err := s.idGen.GenerateID(ctx)
+	msg, err := s.buildSystemMessage(ctx, convID, content)
 	if err != nil {
 		return 0, err
-	}
-
-	ts := time.Now().UnixMilli() - s.idGen.GetEpochTime()
-
-	msg := &Message{
-		MsgID:   msgID,
-		ConvID:  convID,
-		FromUID: 0,
-		Content: string(content),
-		Ts:      ts,
 	}
 
 	_, err = s.msgStore.InsertMessage(ctx, s.msgStore.DB(), msg)
@@ -212,23 +245,14 @@ func (s *Service) SendNotificationToUser(ctx context.Context, uid int64, notifTy
 		return 0, err
 	}
 
-	return msgID, nil
+	return msg.MsgID, nil
 }
 
+// sendSystemMessageTx 事务内发送系统消息
 func (s *Service) sendSystemMessageTx(ctx context.Context, tx *sql.Tx, convID string, content []byte) (int64, error) {
-	msgID, err := s.idGen.GenerateID(ctx)
+	msg, err := s.buildSystemMessage(context.Background(), convID, content)
 	if err != nil {
 		return 0, err
-	}
-
-	ts := time.Now().UnixMilli() - s.idGen.GetEpochTime()
-
-	msg := &Message{
-		MsgID:   msgID,
-		ConvID:  convID,
-		FromUID: 0,
-		Content: string(content),
-		Ts:      ts,
 	}
 
 	_, err = s.msgStore.InsertMessage(context.Background(), tx, msg)
@@ -236,7 +260,7 @@ func (s *Service) sendSystemMessageTx(ctx context.Context, tx *sql.Tx, convID st
 		return 0, err
 	}
 
-	return msgID, nil
+	return msg.MsgID, nil
 }
 
 

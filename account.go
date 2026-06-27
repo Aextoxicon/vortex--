@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -447,36 +448,22 @@ func (s *Service) DeleteUser(ctx context.Context, userID int64) error {
 		}
 	}
 
-	tx, err := s.userStore.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
+	_, err = withTx[struct{}](s.userStore.DB(), ctx, nil, func(tx *sql.Tx) (struct{}, error) {
+		if _, err := s.groupMemStore.DeleteByUser(context.Background(), tx, userID); err != nil {
+			return struct{}{}, err
 		}
-	}()
-
-	if _, err := s.groupMemStore.DeleteByUser(context.Background(), tx, userID); err != nil {
-		return err
-	}
-
-	if _, err := s.convPartStore.DeleteByUserTx(tx, userID); err != nil {
-		return err
-	}
-
-	if _, err := s.friendStore.DeleteByUser(context.Background(), tx, userID); err != nil {
-		return err
-	}
-	if _, err := s.userStore.Delete(context.Background(), tx, userID); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	tx = nil
-	return nil
+		if _, err := s.convPartStore.DeleteByUserTx(tx, userID); err != nil {
+			return struct{}{}, err
+		}
+		if _, err := s.friendStore.DeleteByUser(context.Background(), tx, userID); err != nil {
+			return struct{}{}, err
+		}
+		if _, err := s.userStore.Delete(context.Background(), tx, userID); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, nil
+	})
+	return err
 }
 
 func (s *Service) ValidateCredentials(user *User, password string) error {

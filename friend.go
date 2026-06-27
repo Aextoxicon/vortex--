@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -302,31 +302,22 @@ func (s *Service) GetReceivedRequests(ctx context.Context, toUserID int64) ([]*F
 }
 
 func (s *Service) AcceptFriendRequest(ctx context.Context, requestID, userID int64) error {
-	tx, err := s.friendStore.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
+	fromUserID, err := withTx[int64](s.friendStore.DB(), ctx, nil, func(tx *sql.Tx) (int64, error) {
+		fromUserID, err := s.friendStore.AcceptByIDTx(tx, requestID, userID)
+		if err != nil {
+			return 0, err
 		}
-	}()
-
-	fromUserID, err := s.friendStore.AcceptByIDTx(tx, requestID, userID)
+		if fromUserID == 0 {
+			return 0, ErrNotFound
+		}
+		if fromUserID < 0 {
+			return 0, ErrForbidden
+		}
+		return fromUserID, nil
+	})
 	if err != nil {
 		return err
 	}
-	if fromUserID == 0 {
-		return ErrNotFound
-	}
-	if fromUserID < 0 {
-		return ErrForbidden
-	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	tx = nil
 
 	goSafe(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -338,132 +329,32 @@ func (s *Service) AcceptFriendRequest(ctx context.Context, requestID, userID int
 }
 
 func (s *Service) RejectFriendRequest(ctx context.Context, requestID, userID int64) error {
-	tx, err := s.friendStore.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
+	_, err := withTx[struct{}](s.friendStore.DB(), ctx, nil, func(tx *sql.Tx) (struct{}, error) {
+		affected, err := s.friendStore.RejectTx(tx, requestID, userID)
+		if err != nil {
+			return struct{}{}, err
 		}
-	}()
-
-	affected, err := s.friendStore.RejectTx(tx, requestID, userID)
-	if err != nil {
-		return err
-	}
-	if !affected {
-		return ErrNotFound
-	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	tx = nil
-	return nil
+		if !affected {
+			return struct{}{}, ErrNotFound
+		}
+		return struct{}{}, nil
+	})
+	return err
 }
 
 // 要不要把取消等同于拒绝呢，哦baby不要拒绝我~
 func (s *Service) CancelFriendRequest(ctx context.Context, requestID, fromUserID int64) error {
-	tx, err := s.friendStore.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
+	_, err := withTx[struct{}](s.friendStore.DB(), ctx, nil, func(tx *sql.Tx) (struct{}, error) {
+		affected, err := s.friendStore.CancelTx(tx, requestID, fromUserID)
+		if err != nil {
+			return struct{}{}, err
 		}
-	}()
-
-	affected, err := s.friendStore.CancelTx(tx, requestID, fromUserID)
-	if err != nil {
-		return err
-	}
-	if !affected {
-		return ErrNotFound
-	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	tx = nil
-	return nil
-}
-
-// 生成私聊会话 ID，格式为 "p_{较小的 publicID}_{较大的 publicID}"
-func PrivateConvID(publicID1, publicID2 string) string {
-	if publicID1 < publicID2 {
-		return fmt.Sprintf("p_%s_%s", publicID1, publicID2)
-	}
-	return fmt.Sprintf("p_%s_%s", publicID2, publicID1)
-}
-
-func IsPrivateConv(convID string) bool {
-	return len(convID) > 0 && convID[0] == 'p'
-}
-
-func ParsePrivateConv(convID string) (string, string, error) {
-	if !IsPrivateConv(convID) {
-		return "", "", errors.New("not a private conversation")
-	}
-	// 按第一个下划线分割，剩余部分再按最后一个下划线分割
-	if len(convID) < 3 || convID[0] != 'p' || convID[1] != '_' {
-		return "", "", errors.New("invalid private conversation format")
-	}
-
-	rest := convID[2:] // 跳过 "p_"
-	lastUnderscore := -1
-	for i := len(rest) - 1; i >= 0; i-- {
-		if rest[i] == '_' {
-			lastUnderscore = i
-			break
+		if !affected {
+			return struct{}{}, ErrNotFound
 		}
-	}
-
-	if lastUnderscore == -1 {
-		return "", "", errors.New("invalid private conversation format")
-	}
-
-	a := rest[:lastUnderscore]
-	b := rest[lastUnderscore+1:]
-	return a, b, nil
+		return struct{}{}, nil
+	})
+	return err
 }
 
-func CanAccessPrivateConv(convID string, publicID string) bool {
-	a, b, err := ParsePrivateConv(convID)
-	if err != nil {
-		return false
-	}
-	return a == publicID || b == publicID
-}
-
-// 这一段说不定可能会丢到shared里面，但是收益不明显
-func ExtractConversationType(convID string) string {
-	if len(convID) == 0 {
-		return ""
-	}
-	if convID[0] == 'p' {
-		return "p"
-	}
-	if convID[0] == 'g' {
-		return "g"
-	}
-	return ""
-}
-
-func GetOtherPublicID(convID string, myPublicID string) string {
-	if !IsPrivateConv(convID) {
-		return ""
-	}
-	a, b, err := ParsePrivateConv(convID)
-	if err != nil {
-		return ""
-	}
-	if a == myPublicID {
-		return b
-	}
-	if b == myPublicID {
-		return a
-	}
-	return ""
-}
+// 会话 ID 相关函数已迁移至 conversation.go

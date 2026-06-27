@@ -85,30 +85,36 @@ func (w *Worker) runTableManager() {
 	w.runLoop(calculateNextMondayDelay(), time.Duration(w.cfg.WorkerTableCreateIntervalHours)*time.Hour, w.createWeekTables)
 }
 
-func (w *Worker) createTablesFromTodayToSunday() error {
-	now := time.Now().UTC()
-	dayOfWeek := int(now.Weekday())
-	daysToSunday := 0
-	if dayOfWeek != 0 {
-		daysToSunday = 7 - dayOfWeek
+// createTablesInRange 通用：在 [start, end] 日期范围内创建消息分区表
+func (w *Worker) createTablesInRange(start, end time.Time, logMsg string) (lastErr error) {
+	days := int(end.Sub(start).Hours() / 24)
+	if days < 0 {
+		return nil
 	}
-
-	var lastErr error
-	for offset := 0; offset <= daysToSunday; offset++ {
-		date := now.AddDate(0, 0, offset)
+	for offset := 0; offset <= days; offset++ {
+		date := start.AddDate(0, 0, offset)
 		tableName := MessageTableNameByDate(date)
 		if err := w.msgStore.EnsurePartition(tableName); err != nil {
 			slog.Error("failed to create table", "table", tableName, "error", err)
 			lastErr = err
 		}
 	}
-	slog.Info("initial message tables created")
+	if logMsg != "" {
+		slog.Info(logMsg)
+	}
 	return lastErr
 }
 
-// CreateTablesFromTodayToSundayWithError 带错误返回的版本，用于启动时检查
+// CreateTablesFromTodayToSundayWithError 启动时创建从今天到周日的表
 func (w *Worker) CreateTablesFromTodayToSundayWithError() error {
-	return w.createTablesFromTodayToSunday()
+	now := time.Now().UTC()
+	dayOfWeek := int(now.Weekday())
+	daysToSunday := 0
+	if dayOfWeek != 0 {
+		daysToSunday = 7 - dayOfWeek
+	}
+	end := now.AddDate(0, 0, daysToSunday)
+	return w.createTablesInRange(now, end, "initial message tables created")
 }
 
 func (w *Worker) createWeekTables() {
@@ -118,15 +124,8 @@ func (w *Worker) createWeekTables() {
 		weekday = 7
 	}
 	nextMonday := now.AddDate(0, 0, 8-weekday)
-
-	for offset := 0; offset < 7; offset++ {
-		date := nextMonday.AddDate(0, 0, offset)
-		tableName := MessageTableNameByDate(date)
-		if err := w.msgStore.EnsurePartition(tableName); err != nil {
-			slog.Error("failed to create table", "table", tableName, "error", err)
-		}
-	}
-	slog.Info("weekly message tables created")
+	nextSunday := nextMonday.AddDate(0, 0, 6)
+	_ = w.createTablesInRange(nextMonday, nextSunday, "weekly message tables created")
 }
 
 func calculateNextMondayDelay() time.Duration {

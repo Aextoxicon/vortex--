@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	crand "crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -338,49 +339,35 @@ func (s *Service) GetGroupsByOwner(ctx context.Context, ownerID int64) ([]*Group
 
 // 这里面一部分原先是直接SQL，后面挪到store里面了
 func (s *Service) CreateGroup(ctx context.Context, name, description string, ownerID int64) (string, error) {
-	tx, err := s.groupStore.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
-		}
-	}()
-
-	now := time.Now().UnixMilli()
 	groupID := s.GenerateGroupID()
+	now := time.Now().UnixMilli()
 
-	group := &Group{
-		GroupID:     groupID,
-		Name:        name,
-		Description: description,
-		OwnerID:     ownerID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		IsDeleted:   0,
-	}
-	_, err = s.groupStore.Insert(context.Background(), tx, group)
-	if err != nil {
-		return "", err
-	}
+	_, err := withTx[struct{}](s.groupStore.DB(), ctx, nil, func(tx *sql.Tx) (struct{}, error) {
+		group := &Group{
+			GroupID:     groupID,
+			Name:        name,
+			Description: description,
+			OwnerID:     ownerID,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			IsDeleted:   0,
+		}
+		if _, err := s.groupStore.Insert(context.Background(), tx, group); err != nil {
+			return struct{}{}, err
+		}
 
-	member := &GroupMember{
-		GroupID:  groupID,
-		UID:      ownerID,
-		Role:     "owner",
-		JoinedAt: now,
-	}
-	_, err = s.groupMemStore.Insert(context.Background(), tx, member)
-	if err != nil {
-		return "", err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	tx = nil
-	return groupID, nil
+		member := &GroupMember{
+			GroupID:  groupID,
+			UID:      ownerID,
+			Role:     "owner",
+			JoinedAt: now,
+		}
+		if _, err := s.groupMemStore.Insert(context.Background(), tx, member); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, nil
+	})
+	return groupID, err
 }
 
 func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
@@ -390,29 +377,16 @@ func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
 }
 
 func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
-	tx, err := s.groupStore.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
+	_, err := withTx[struct{}](s.groupStore.DB(), ctx, nil, func(tx *sql.Tx) (struct{}, error) {
+		if _, err := s.groupMemStore.DeleteByGroupTx(tx, groupID); err != nil {
+			return struct{}{}, err
 		}
-	}()
-
-	if _, err := s.groupMemStore.DeleteByGroupTx(tx, groupID); err != nil {
-		return err
-	}
-
-	if _, err := s.groupStore.Delete(context.Background(), tx, groupID); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	tx = nil
-	return nil
+		if _, err := s.groupStore.Delete(context.Background(), tx, groupID); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, nil
+	})
+	return err
 }
 
 func (s *Service) AddMember(ctx context.Context, groupID string, userID int64, role string) error {
@@ -449,37 +423,25 @@ func (s *Service) AddMember(ctx context.Context, groupID string, userID int64, r
 }
 
 func (s *Service) RemoveMember(ctx context.Context, groupID string, userID int64) error {
-	tx, err := s.groupMemStore.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
+	_, err := withTx[struct{}](s.groupMemStore.DB(), ctx, nil, func(tx *sql.Tx) (struct{}, error) {
+		member, err := s.groupMemStore.Get(context.Background(), tx, groupID, userID)
+		if err != nil {
+			return struct{}{}, err
 		}
-	}()
+		if member == nil {
+			return struct{}{}, ErrNotMember
+		}
+		if member.Role == "owner" {
+			return struct{}{}, ErrForbidden
+		}
 
-	member, err := s.groupMemStore.Get(context.Background(), tx, groupID, userID)
-	if err != nil {
-		return err
-	}
-	if member == nil {
-		return ErrNotMember
-	}
-	if member.Role == "owner" {
-		return ErrForbidden
-	}
-
-	_, err = s.groupMemStore.DeleteByGroupAndUser(context.Background(), tx, groupID, userID)
-	if err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	tx = nil
-	return nil
+		_, err = s.groupMemStore.DeleteByGroupAndUser(context.Background(), tx, groupID, userID)
+		if err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, nil
+	})
+	return err
 }
 
 func (s *Service) KickMember(ctx context.Context, groupID string, memberID, ownerID int64) error {
@@ -506,29 +468,6 @@ func (s *Service) KickMember(ctx context.Context, groupID string, memberID, owne
 		return ErrNotFound
 	}
 
-	tx, err := s.msgStore.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
-		}
-	}()
-
-	isMember, err := s.groupMemStore.IsMember(context.Background(), tx, groupID, memberID)
-	if err != nil {
-		return err
-	}
-	if !isMember {
-		return ErrNotMember
-	}
-
-	_, err = s.groupMemStore.DeleteByGroupAndUser(context.Background(), tx, groupID, memberID)
-	if err != nil {
-		return err
-	}
-
 	convID := "g_" + groupID
 	systemMsg := map[string]interface{}{
 		"type":    "system",
@@ -543,12 +482,27 @@ func (s *Service) KickMember(ctx context.Context, groupID string, memberID, owne
 		return fmt.Errorf("marshal system message failed: %w", err)
 	}
 
-	_, err = s.sendSystemMessageTx(ctx, tx, convID, contentBytes)
-	if err != nil {
-		return err
-	}
+	_, err = withTx[struct{}](s.msgStore.DB(), ctx, nil, func(tx *sql.Tx) (struct{}, error) {
+		isMember, err := s.groupMemStore.IsMember(context.Background(), tx, groupID, memberID)
+		if err != nil {
+			return struct{}{}, err
+		}
+		if !isMember {
+			return struct{}{}, ErrNotMember
+		}
 
-	if err := tx.Commit(); err != nil {
+		_, err = s.groupMemStore.DeleteByGroupAndUser(context.Background(), tx, groupID, memberID)
+		if err != nil {
+			return struct{}{}, err
+		}
+
+		_, err = s.sendSystemMessageTx(ctx, tx, convID, contentBytes)
+		if err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, nil
+	})
+	if err != nil {
 		return err
 	}
 
@@ -617,13 +571,4 @@ func (s *Service) IsValidGroupID(groupID string) bool {
 	return len(groupID) == expectedLen && groupID[:2] == "g_"
 }
 
-func IsGroupConv(convID string) bool {
-	return len(convID) >= 2 && convID[:2] == "g_"
-}
-
-func ExtractGroupID(convID string) string {
-	if IsGroupConv(convID) {
-		return convID[2:] // rm "g_" prefix
-	}
-	return ""
-}
+// IsGroupConv 和 ExtractGroupID 已迁移至 conversation.go

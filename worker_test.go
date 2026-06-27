@@ -126,7 +126,7 @@ func TestWorker_CreateTablesFromTodayToSunday(t *testing.T) {
 	worker, db, _ := setupTestWorker(t)
 	ctx := context.Background()
 
-	worker.createTablesFromTodayToSunday()
+	_ = worker.CreateTablesFromTodayToSundayWithError()
 
 	now := time.Now().UTC()
 	dayOfWeek := int(now.Weekday())
