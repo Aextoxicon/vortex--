@@ -123,8 +123,10 @@ jobs:
         if: steps.version.outputs.should_release == 'true'
         run: |
           chmod +x vortex-*
+          # 验证与 runner 架构匹配的二进制
           ./vortex-amd64 --version
-          ./vortex-arm64 --version
+          # arm64 二进制无法在 amd64 runner 上直接运行，用 file 验证其格式
+          file vortex-arm64
 
       - name: Upload binary artifacts
         if: steps.version.outputs.should_release == 'true'
