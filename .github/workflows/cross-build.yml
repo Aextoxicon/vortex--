@@ -98,28 +98,70 @@ jobs:
         if: steps.version.outputs.should_release == 'true'
         run: |
           COMMIT=$(git rev-parse --short HEAD)
+          mkdir -p docker-bin
           for arch in amd64 arm64; do
             echo "Building linux/$arch ..."
             GOOS=linux GOARCH=$arch CGO_ENABLED=0 \
             go build -v \
               -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }} -X main.Commit=$COMMIT" \
-              -o vortex-$arch .
+              -o docker-bin/vortex-$arch .
           done
           echo "All binaries built with version ${{ steps.version.outputs.version }}"
 
       - name: Check binary version
         if: steps.version.outputs.should_release == 'true'
         run: |
-          chmod +x vortex-*
-          ./vortex-amd64 --version
-          file vortex-arm64
+          chmod +x docker-bin/vortex-*
+          ./docker-bin/vortex-amd64 --version
+          file docker-bin/vortex-arm64
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sanitize image name for Docker
+        id: img
+        run: |
+          RAW="${{ github.repository }}"
+          CLEAN=$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[._-][._-]*$//')
+          echo "Sanitized image name: $CLEAN"
+          echo "name=${CLEAN}" >> $GITHUB_OUTPUT
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{ is_default_branch }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cross
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
       - name: Upload binary artifacts
         if: steps.version.outputs.should_release == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: vortex-binaries-${{ steps.version.outputs.version }}
-          path: vortex-*
+          path: docker-bin/vortex-*
           retention-days: 7
 
       - name: Create and push Git tag
@@ -142,76 +184,9 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
           files: |
-            vortex-amd64
-            vortex-arm64
+            docker-bin/vortex-amd64
+            docker-bin/vortex-arm64
           generate_release_notes: true
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  docker:
-    name: Docker build & push
-    runs-on: ubuntu-latest
-    needs: [release]
-    if: >
-      needs.release.outputs.should_release == 'true' &&
-      github.event_name != 'pull_request'
-
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Download all binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: vortex-binaries-${{ needs.release.outputs.version }}
-          path: docker-bin
-
-      - name: Make binaries executable
-        run: chmod +x docker-bin/*
-
-      - name: Sanitize image name for Docker
-        id: img
-        run: |
-          RAW="${{ github.repository }}"
-          CLEAN=$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[._-][._-]*$//')
-          echo "Sanitized image name: $CLEAN"
-          echo "name=${CLEAN}" >> $GITHUB_OUTPUT
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{ is_default_branch }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.cross
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
