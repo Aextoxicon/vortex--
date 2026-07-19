@@ -137,77 +137,99 @@ func (g *IdGenerator) GenerateID(ctx context.Context) (int64, error) {
 	g.WaitInit()
 
 	for {
-		seg := g.peekSegment()
-		if seg == nil {
-			if err := g.fetchNewSegmentSync(ctx); err != nil {
-				return 0, err
-			}
-			continue
-		}
-
-		id := seg.current.Add(1)
-		if id <= seg.EndID {
-			g.tryPrefetch(seg)
+		id, ok := g.tryGenerateFromCurrent()
+		if ok {
 			return id, nil
 		}
 
-		g.popSegment()
 		if err := g.fetchNewSegmentSync(ctx); err != nil {
 			return 0, err
 		}
 	}
 }
 
-func (g *IdGenerator) peekSegment() *IdSegment {
+// tryGenerateFromCurrent 在单次锁操作内完成：peek当前段、尝试分配ID、段耗尽时pop。
+// 返回 (id, true) 表示分配成功；
+// 返回 (0, false) 表示当前无可用段或段已耗尽，调用者应 fetch 新段后重试。
+func (g *IdGenerator) tryGenerateFromCurrent() (int64, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
 	if len(g.segments) == 0 {
-		return nil
+		return 0, false
 	}
-	return g.segments[0]
-}
 
-func (g *IdGenerator) popSegment() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if len(g.segments) > 0 {
-		g.segments = g.segments[1:]
+	seg := g.segments[0]
+	id := seg.current.Add(1)
+	if id <= seg.EndID {
+		// 在锁内检查是否需要预取下一个段，避免锁外检查时状态已被修改
+		if int64(seg.Remaining()) <= g.cfg.SegmentSize/4 && len(g.segments) < 2 {
+			select {
+			case g.prefetchCh <- struct{}{}:
+				go func() {
+					defer func() { <-g.prefetchCh }()
+					g.fetchNewSegmentForPrefetch(context.Background())
+				}()
+			default:
+			}
+		}
+		return id, true
 	}
-}
 
-func (g *IdGenerator) tryPrefetch(current *IdSegment) {
-	g.mu.Lock()
-	if int64(current.Remaining()) > g.cfg.SegmentSize/4 || len(g.segments) >= 2 {
-		g.mu.Unlock()
-		return
-	}
-	g.mu.Unlock()
-
-	select {
-	case g.prefetchCh <- struct{}{}:
-		go func() {
-			defer func() { <-g.prefetchCh }()
-			_ = g.fetchNewSegmentSync(context.Background())
-		}()
-	default:
-	}
+	// 当前段已耗尽，pop掉它
+	g.segments = g.segments[1:]
+	return 0, false
 }
 
 func (g *IdGenerator) fetchNewSegmentSync(ctx context.Context) error {
+	// 第一次检查：快速判断是否已有可用段，避免不必要的 DB 操作
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
 	if len(g.segments) >= 1 {
+		g.mu.Unlock()
 		return nil
 	}
+	g.mu.Unlock()
 
-	return g.fetchNewSegmentLocked(ctx)
+	// DB 事务期间不持有 g.mu，其他 goroutine 可以正常从当前段分配 ID
+	seg, err := g.fetchNewSegmentFromDB(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 第二次检查：另一个 goroutine 可能已经 fetch 了段并 append 了
+	// 如果是，丢弃这个段（段已由 DB 持久化，不会被浪费）
+	g.mu.Lock()
+	if len(g.segments) == 0 {
+		g.segments = append(g.segments, seg)
+	}
+	g.mu.Unlock()
+	return nil
 }
 
-func (g *IdGenerator) fetchNewSegmentLocked(ctx context.Context) error { // 假设调用者已经持有锁，所以不需要在这里加锁了
+// fetchNewSegmentForPrefetch 专供预取使用：不检查 segments 长度，直接去 DB fetch。
+// 预取时当前段尚未耗尽，所以 len(segments) >= 1，走 fetchNewSegmentSync 会直接返回。
+// 预取成功后把新段追加到 segments 末尾，使 len(segments) 变为 2，实现"预取"效果。
+func (g *IdGenerator) fetchNewSegmentForPrefetch(ctx context.Context) {
+	seg, err := g.fetchNewSegmentFromDB(ctx)
+	if err != nil {
+		slog.Debug("id generator prefetch failed", "error", err)
+		return
+	}
+
+	g.mu.Lock()
+	// 只保留最多 2 个段，防止预取 goroutine 之间相互覆盖
+	if len(g.segments) < 2 {
+		g.segments = append(g.segments, seg)
+	}
+	g.mu.Unlock()
+}
+
+// fetchNewSegmentFromDB 从数据库获取新段，不持有 g.mu。
+// 调用者自行决定何时将段加入 segments 列表。
+func (g *IdGenerator) fetchNewSegmentFromDB(ctx context.Context) (*IdSegment, error) {
 	tx, err := g.msgSt.DB().BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() {
 		if tx != nil {
@@ -217,7 +239,7 @@ func (g *IdGenerator) fetchNewSegmentLocked(ctx context.Context) error { // 假�
 
 	state, err := g.idGenSt.GetFirstForUpdate(tx)
 	if err != nil {
-		return fmt.Errorf("load state: %w", err)
+		return nil, fmt.Errorf("load state: %w", err)
 	}
 
 	var startTs int64
@@ -251,17 +273,15 @@ func (g *IdGenerator) fetchNewSegmentLocked(ctx context.Context) error { // 假�
 		_, err = g.idGenSt.InsertWithTx(tx, newState)
 	}
 	if err != nil {
-		return fmt.Errorf("persist state: %w", err)
+		return nil, fmt.Errorf("persist state: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
+		return nil, fmt.Errorf("commit tx: %w", err)
 	}
 	tx = nil
 
-	g.segments = append(g.segments, seg)
-
-	return nil
+	return seg, nil
 }
 
 func (g *IdGenerator) fetchNewSegment(ctx context.Context) error {
