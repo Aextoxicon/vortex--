@@ -33,10 +33,10 @@ vortex/
 
 # 环境要求
 
-- Go 1.26+
-- PostgreSQL 16+
-- Docker (可选，用于测试)
-- S3 服务
+Go 1.26+
+PostgreSQL 16+
+Docker (可选，用于测试)
+S3 服务
 
 # 安装
 
@@ -136,7 +136,7 @@ sudo systemctl start vortex
 
 # 文档
 
-- [openapi.yaml](openapi.yaml) - OpenAPI 3.0规范
+[openapi.yaml](openapi.yaml) OpenAPI 3.0规范
 
 # License
 
